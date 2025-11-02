@@ -11,7 +11,7 @@ function Switch({
     <BaseSwitch.Root
       data-slot="switch"
       className={cn(
-        "peer data-checked:bg-primary focus-visible:border-ring focus-visible:ring-ring/30 data-unchecked:bg-input outer-stack inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-all duration-200 outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-60",
+        "peer data-checked:bg-primary focus-visible:border-ring focus-visible:ring-ring/30 data-unchecked:bg-input bg-muted border border-border/60 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-all duration-200 outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-60",
         className,
       )}
       {...props}
