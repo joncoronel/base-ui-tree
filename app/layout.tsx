@@ -15,11 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Cubby UI",
-  description: "UI Component Library",
-  icons: {
-    icon: "/cubbylogo-favicon.svg",
-  },
+  title: "Tree Component BaseUI",
+  description: "Tree component made using BaseUI components",
 };
 
 const asap = Asap({
