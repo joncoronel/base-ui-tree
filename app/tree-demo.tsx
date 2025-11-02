@@ -181,7 +181,7 @@ export default function TreeDemo() {
   const [variant, setVariant] = React.useState<TreeVariant>("outline");
 
   return (
-    <div className="bg-background relative flex min-h-screen items-center justify-center p-8">
+    <div className="bg-background relative flex min-h-screen items-start justify-center p-8 pt-16">
       {/* Theme Toggle */}
       {mounted && (
         <button
