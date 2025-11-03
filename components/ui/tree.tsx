@@ -48,7 +48,7 @@ interface TreeContextValue<TData = unknown> {
 
 const TreeContext = React.createContext<TreeContextValue | null>(null);
 
-function useTreeContext<TData = unknown>() {
+function useTreeContext<TData = unknown>(): TreeContextValue<TData> {
   const context = React.useContext(
     TreeContext,
   ) as TreeContextValue<TData> | null;
@@ -68,7 +68,7 @@ interface TreeItemContextValue<TData = unknown> {
 
 const TreeItemContext = React.createContext<TreeItemContextValue | null>(null);
 
-function useTreeItemContext<TData = unknown>() {
+function useTreeItemContext<TData = unknown>(): TreeItemContextValue<TData> {
   const context = React.useContext(
     TreeItemContext,
   ) as TreeItemContextValue<TData> | null;
@@ -116,7 +116,7 @@ function Tree<TData = unknown>({
   className,
   render,
   ...props
-}: TreeProps<TData>) {
+}: TreeProps<TData>): React.ReactElement {
   const [internalExpanded, setInternalExpanded] = React.useState<Set<string>>(
     new Set(defaultExpanded),
   );
@@ -387,10 +387,14 @@ function useTreeCheckboxState<TData>({
       const currentSet = new Set(context.checkedNodes);
 
       // Remove all descendants
-      allDescendantIds.forEach((id) => currentSet.delete(id));
+      for (const id of allDescendantIds) {
+        currentSet.delete(id);
+      }
 
       // Add back the selected values (these are all descendants now)
-      newValues.forEach((id) => currentSet.add(id));
+      for (const id of newValues) {
+        currentSet.add(id);
+      }
 
       // Update this parent's checked status
       // Parent is checked if all leaf descendants are checked
@@ -424,7 +428,7 @@ interface TreeItemInternalProps<TData = unknown> {
 function TreeItemInternal<TData = unknown>({
   node,
   depth,
-}: TreeItemInternalProps<TData>) {
+}: TreeItemInternalProps<TData>): React.ReactElement {
   const context = useTreeContext<TData>();
 
   const hasChildren = Boolean(node.children && node.children.length > 0);
