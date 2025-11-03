@@ -41,7 +41,7 @@ interface TreeContextValue<TData = unknown> {
   renderItem: (item: TreeNode<TData>) => React.ReactElement;
   variant: TreeVariant;
   showLines: boolean;
-  showCheckboxes: boolean;
+  enableBulkActions: boolean;
   disableSelection: boolean;
   focusableNodes: React.MutableRefObject<Map<string, HTMLElement>>;
   visibleNodeIds: string[];
@@ -100,7 +100,7 @@ export interface TreeProps<TData = unknown>
   onCheckedNodesChange?: (checked: string[]) => void;
   variant?: TreeVariant;
   showLines?: boolean;
-  showCheckboxes?: boolean;
+  enableBulkActions?: boolean;
   disableSelection?: boolean;
 }
 
@@ -116,7 +116,7 @@ function Tree<TData = unknown>({
   onCheckedNodesChange,
   variant = "default",
   showLines = false,
-  showCheckboxes = false,
+  enableBulkActions = false,
   disableSelection = false,
   className,
   render,
@@ -189,7 +189,7 @@ function Tree<TData = unknown>({
       renderItem: renderItem as (item: TreeNode<unknown>) => React.ReactElement,
       variant,
       showLines,
-      showCheckboxes,
+      enableBulkActions,
       disableSelection,
       focusableNodes,
       visibleNodeIds,
@@ -208,7 +208,7 @@ function Tree<TData = unknown>({
       renderItem,
       variant,
       showLines,
-      showCheckboxes,
+      enableBulkActions,
       disableSelection,
       visibleNodeIds,
       disabledNodesMap,
@@ -228,7 +228,7 @@ function Tree<TData = unknown>({
       className,
     ),
     role: "tree",
-    "aria-multiselectable": showCheckboxes,
+    "aria-multiselectable": enableBulkActions,
     children: (
       <TreeContext.Provider value={contextValue}>
         {data.map((node) => (
@@ -431,14 +431,14 @@ function useTreeCheckboxState<TData>({
   );
 
   const localChildValues = React.useMemo(() => {
-    if (!hasChildren || !context.checkedNodes || !context.showCheckboxes)
+    if (!hasChildren || !context.checkedNodes || !context.enableBulkActions)
       return [];
     return allDescendantIds.filter((id) => context.checkedNodes!.has(id));
   }, [
     hasChildren,
     context.checkedNodes,
     allDescendantIds,
-    context.showCheckboxes,
+    context.enableBulkActions,
   ]);
 
   const handleLocalCheckboxChange = React.useCallback(
@@ -494,7 +494,7 @@ const TreeItemInternal = React.memo(
     const isSelected = context.selectedNode === node.id;
     const isDisabled = node.disabled || false;
     const isChecked =
-      context.showCheckboxes && context.checkedNodes
+      context.enableBulkActions && context.checkedNodes
         ? context.checkedNodes.has(node.id)
         : false;
 
@@ -549,7 +549,7 @@ const TreeItemInternal = React.memo(
         if (isDisabled) return;
         e.stopPropagation();
 
-        if (context.showCheckboxes) {
+        if (context.enableBulkActions) {
           handleToggleChecked();
         } else if (!context.disableSelection) {
           context.onNodeSelect?.(node.id);
@@ -568,8 +568,8 @@ const TreeItemInternal = React.memo(
           case " ":
             e.preventDefault();
             e.stopPropagation(); // Prevent Collapsible from handling
-            if (context.showCheckboxes) {
-              // When checkboxes shown, Space toggles checked state ONLY
+            if (context.enableBulkActions) {
+              // When bulk actions enabled, Space toggles checked state ONLY
               handleToggleChecked();
             } else {
               // Otherwise, Space expands/collapses and selects
@@ -584,8 +584,8 @@ const TreeItemInternal = React.memo(
           case "Enter":
             e.preventDefault();
             e.stopPropagation(); // Prevent Collapsible from handling
-            if (context.showCheckboxes) {
-              // When checkboxes shown:
+            if (context.enableBulkActions) {
+              // When bulk actions enabled:
               // - Parent nodes: Enter expands/collapses
               // - Leaf nodes: Enter toggles checkbox (default action)
               if (hasChildren) {
@@ -594,7 +594,7 @@ const TreeItemInternal = React.memo(
                 handleToggleChecked();
               }
             } else {
-              // When checkboxes NOT shown, Enter expands/collapses and selects
+              // When bulk actions NOT enabled, Enter expands/collapses and selects
               if (hasChildren) {
                 context.onToggleNode(node.id);
               }
@@ -701,7 +701,7 @@ const TreeItemInternal = React.memo(
 
     const paddingLeft =
       depth *
-      (context.showCheckboxes ? INDENT_SIZE_WITH_CHECKBOX : INDENT_SIZE);
+      (context.enableBulkActions ? INDENT_SIZE_WITH_CHECKBOX : INDENT_SIZE);
 
     // ============================================================================
     // ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS
@@ -759,12 +759,14 @@ const TreeItemInternal = React.memo(
                   context.setLastFocusedNodeId(node.id);
                 }}
                 role="treeitem"
-                aria-selected={context.showCheckboxes ? undefined : isSelected}
-                aria-checked={context.showCheckboxes ? isChecked : undefined}
+                aria-selected={
+                  context.enableBulkActions ? undefined : isSelected
+                }
+                aria-checked={context.enableBulkActions ? isChecked : undefined}
                 aria-disabled={isDisabled}
                 tabIndex={isDisabled ? -1 : isTabbable ? 0 : -1}
               >
-                {context.showCheckboxes && (
+                {context.enableBulkActions && (
                   <Checkbox
                     value={node.id}
                     checked={isChecked}
@@ -788,8 +790,8 @@ const TreeItemInternal = React.memo(
         <div
           role="treeitem"
           aria-expanded={isExpanded}
-          aria-selected={context.showCheckboxes ? undefined : isSelected}
-          aria-checked={context.showCheckboxes ? isChecked : undefined}
+          aria-selected={context.enableBulkActions ? undefined : isSelected}
+          aria-checked={context.enableBulkActions ? isChecked : undefined}
           aria-disabled={isDisabled}
           className={cn("mt-0.5 first:mt-0")}
         >
@@ -805,8 +807,8 @@ const TreeItemInternal = React.memo(
               isDisabled={isDisabled}
               disableSelection={context.disableSelection}
             >
-              {context.showCheckboxes ? (
-                // In checkbox mode, use plain div to avoid Collapsible.Trigger keyboard handling
+              {context.enableBulkActions ? (
+                // In bulk actions mode, use plain div to avoid Collapsible.Trigger keyboard handling
                 <div
                   ref={(el) => {
                     if (el) {
@@ -856,7 +858,7 @@ const TreeItemInternal = React.memo(
                   {context.renderItem(node)}
                 </div>
               ) : (
-                // In navigation mode, use Collapsible.Trigger for built-in behavior
+                // In navigation/selection mode, use Collapsible.Trigger for built-in behavior
                 <BaseCollapsible.Trigger
                   ref={(el) => {
                     if (el) {
@@ -928,7 +930,7 @@ const TreeItemInternal = React.memo(
       </TreeItemContext.Provider>
     );
 
-    if (context.showCheckboxes) {
+    if (context.enableBulkActions) {
       return (
         <CheckboxGroup
           value={localChildValues}

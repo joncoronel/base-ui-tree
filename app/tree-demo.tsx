@@ -175,8 +175,8 @@ export default function TreeDemo() {
   }, []);
 
   // Feature toggles
-  const [showCheckboxes, setShowCheckboxes] = React.useState(false);
-  const [showLines, setShowLines] = React.useState(true);
+  const [enableBulkActions, setEnableBulkActions] = React.useState(true);
+  const [showLines, setShowLines] = React.useState(false);
   const [disableSelection, setDisableSelection] = React.useState(true);
   const [variant, setVariant] = React.useState<TreeVariant>("outline");
 
@@ -206,7 +206,7 @@ export default function TreeDemo() {
           onCheckedNodesChange={setCheckedNodes}
           variant={variant}
           showLines={showLines}
-          showCheckboxes={showCheckboxes}
+          enableBulkActions={enableBulkActions}
           disableSelection={disableSelection}
           defaultExpanded={["src", "components"]}
         >
@@ -236,13 +236,13 @@ export default function TreeDemo() {
               {/* Feature Toggles */}
               <div className="flex items-center justify-between">
                 <Label htmlFor="checkboxes-mobile" className="cursor-pointer">
-                  Show Checkboxes
+                  Enable Bulk Actions
                 </Label>
                 <Switch
                   id="checkboxes-mobile"
-                  checked={showCheckboxes}
+                  checked={enableBulkActions}
                   onCheckedChange={(checked) => {
-                    setShowCheckboxes(checked);
+                    setEnableBulkActions(checked);
                     if (checked) setShowLines(false);
                   }}
                 />
@@ -257,7 +257,7 @@ export default function TreeDemo() {
                   checked={showLines}
                   onCheckedChange={(checked) => {
                     setShowLines(checked);
-                    if (checked) setShowCheckboxes(false);
+                    if (checked) setEnableBulkActions(false);
                   }}
                 />
               </div>
@@ -334,13 +334,13 @@ export default function TreeDemo() {
             {/* Feature Toggles */}
             <div className="flex items-center justify-between">
               <Label htmlFor="checkboxes" className="cursor-pointer">
-                Show Checkboxes
+                Enable Bulk Actions
               </Label>
               <Switch
                 id="checkboxes"
-                checked={showCheckboxes}
+                checked={enableBulkActions}
                 onCheckedChange={(checked) => {
-                  setShowCheckboxes(checked);
+                  setEnableBulkActions(checked);
                   if (checked) setShowLines(false);
                 }}
               />
@@ -355,7 +355,7 @@ export default function TreeDemo() {
                 checked={showLines}
                 onCheckedChange={(checked) => {
                   setShowLines(checked);
-                  if (checked) setShowCheckboxes(false);
+                  if (checked) setEnableBulkActions(false);
                 }}
               />
             </div>
