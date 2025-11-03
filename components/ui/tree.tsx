@@ -218,7 +218,7 @@ function VerticalLine({ paddingLeft }: VerticalLineProps) {
   return (
     <div
       className="absolute top-0 bottom-0 left-0"
-      style={{ left: paddingLeft - 4.5 }}
+      style={{ left: paddingLeft - VERTICAL_LINE_OFFSET }}
     >
       <div className="bg-border h-full w-px" />
     </div>
@@ -258,6 +258,15 @@ function ParentCheckbox({ disabled }: ParentCheckboxProps) {
 }
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+const INDENT_SIZE = 20;
+const INDENT_SIZE_WITH_CHECKBOX = 12;
+const VERTICAL_LINE_OFFSET = 4.5;
+const CHILD_VERTICAL_LINE_OFFSET = 15.5;
+
+// ============================================================================
 // Helper Functions - Defined outside component for stable references
 // ============================================================================
 
@@ -282,6 +291,125 @@ function getLeafNodeIds<TData>(nodes: TreeNode<TData>[]): string[] {
     }
   }
   return leafIds;
+}
+
+// ============================================================================
+// Shared Rendering Components
+// ============================================================================
+
+interface TreeItemContainerProps {
+  paddingLeft: number;
+  showLines: boolean;
+  depth: number;
+  isSelected: boolean;
+  isDisabled: boolean;
+  disableSelection: boolean;
+  children: React.ReactNode;
+}
+
+/**
+ * Shared container structure for both leaf and parent tree items.
+ * Handles padding, vertical lines, and hover/selection styling.
+ */
+function TreeItemContainer({
+  paddingLeft,
+  showLines,
+  depth,
+  isSelected,
+  isDisabled,
+  disableSelection,
+  children,
+}: TreeItemContainerProps) {
+  return (
+    <div className="group relative flex" style={{ paddingLeft }}>
+      {showLines && depth > 0 && <VerticalLine paddingLeft={paddingLeft} />}
+      <div
+        className={cn(
+          "flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
+          "hover:bg-accent",
+          isSelected && !disableSelection && "bg-accent text-accent-foreground",
+          isDisabled && "cursor-not-allowed opacity-50",
+        )}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Custom Hooks
+// ============================================================================
+
+interface UseTreeCheckboxStateParams<TData> {
+  node: TreeNode<TData>;
+  hasChildren: boolean;
+  context: TreeContextValue<TData>;
+}
+
+interface UseTreeCheckboxStateReturn {
+  allDescendantIds: string[];
+  localChildValues: string[];
+  handleLocalCheckboxChange: (newValues: string[]) => void;
+}
+
+function useTreeCheckboxState<TData>({
+  node,
+  hasChildren,
+  context,
+}: UseTreeCheckboxStateParams<TData>): UseTreeCheckboxStateReturn {
+  // Memoize the results of calling helper functions (defined outside component)
+  const allDescendantIds = React.useMemo(
+    () => (hasChildren ? getAllDescendantIds(node.children || []) : []),
+    [hasChildren, node.children],
+  );
+
+  const allLeafIds = React.useMemo(
+    () => (hasChildren ? getLeafNodeIds(node.children || []) : []),
+    [hasChildren, node.children],
+  );
+
+  const localChildValues = React.useMemo(() => {
+    if (!hasChildren || !context.checkedNodes || !context.showCheckboxes)
+      return [];
+    return allDescendantIds.filter((id) => context.checkedNodes!.has(id));
+  }, [
+    hasChildren,
+    context.checkedNodes,
+    allDescendantIds,
+    context.showCheckboxes,
+  ]);
+
+  const handleLocalCheckboxChange = React.useCallback(
+    (newValues: string[]) => {
+      if (!context.onCheckedNodesChange || !context.checkedNodes) return;
+
+      const currentSet = new Set(context.checkedNodes);
+
+      // Remove all descendants
+      allDescendantIds.forEach((id) => currentSet.delete(id));
+
+      // Add back the selected values (these are all descendants now)
+      newValues.forEach((id) => currentSet.add(id));
+
+      // Update this parent's checked status
+      // Parent is checked if all leaf descendants are checked
+      if (newValues.length === allLeafIds.length) {
+        currentSet.add(node.id);
+      } else {
+        currentSet.delete(node.id);
+      }
+
+      context.onCheckedNodesChange(Array.from(currentSet));
+    },
+    [context, allDescendantIds, allLeafIds, node.id],
+  );
+
+  return {
+    allDescendantIds,
+    localChildValues,
+    handleLocalCheckboxChange,
+  };
 }
 
 // ============================================================================
@@ -356,58 +484,20 @@ function TreeItemInternal<TData = unknown>({
     [hasChildren, isExpanded, context, node.id, isDisabled],
   );
 
-  const paddingLeft = depth * (context.showCheckboxes ? 12 : 20);
+  const paddingLeft =
+    depth * (context.showCheckboxes ? INDENT_SIZE_WITH_CHECKBOX : INDENT_SIZE);
 
   // ============================================================================
   // ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS
   // ============================================================================
 
-  // Memoize the results of calling helper functions (defined outside component)
-  const allDescendantIds = React.useMemo(
-    () => (hasChildren ? getAllDescendantIds(node.children || []) : []),
-    [hasChildren, node.children],
-  );
-
-  const allLeafIds = React.useMemo(
-    () => (hasChildren ? getLeafNodeIds(node.children || []) : []),
-    [hasChildren, node.children],
-  );
-
-  const localChildValues = React.useMemo(() => {
-    if (!hasChildren || !context.checkedNodes || !context.showCheckboxes)
-      return [];
-    return allDescendantIds.filter((id) => context.checkedNodes!.has(id));
-  }, [
-    hasChildren,
-    context.checkedNodes,
-    allDescendantIds,
-    context.showCheckboxes,
-  ]);
-
-  const handleLocalCheckboxChange = React.useCallback(
-    (newValues: string[]) => {
-      if (!context.onCheckedNodesChange || !context.checkedNodes) return;
-
-      const currentSet = new Set(context.checkedNodes);
-
-      // Remove all descendants
-      allDescendantIds.forEach((id) => currentSet.delete(id));
-
-      // Add back the selected values (these are all descendants now)
-      newValues.forEach((id) => currentSet.add(id));
-
-      // Update this parent's checked status
-      // Parent is checked if all leaf descendants are checked
-      if (newValues.length === allLeafIds.length) {
-        currentSet.add(node.id);
-      } else {
-        currentSet.delete(node.id);
-      }
-
-      context.onCheckedNodesChange(Array.from(currentSet));
-    },
-    [context, allDescendantIds, allLeafIds, node.id],
-  );
+  // Checkbox state management (extracted to custom hook for clarity)
+  const { allDescendantIds, localChildValues, handleLocalCheckboxChange } =
+    useTreeCheckboxState({
+      node,
+      hasChildren,
+      context,
+    });
 
   // ============================================================================
   // NOW SAFE TO HAVE CONDITIONAL RETURNS
@@ -417,23 +507,14 @@ function TreeItemInternal<TData = unknown>({
   if (!hasChildren) {
     return (
       <TreeItemContext.Provider value={itemContextValue}>
-        <div
-          className={cn("group relative mt-0.5 flex first:mt-0")}
-          style={{ paddingLeft }}
-        >
-          {context.showLines && depth > 0 && (
-            <VerticalLine paddingLeft={paddingLeft} />
-          )}
-
-          <div
-            className={cn(
-              "flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
-              "hover:bg-accent",
-              isSelected &&
-                !context.disableSelection &&
-                "bg-accent text-accent-foreground",
-              isDisabled && "cursor-not-allowed opacity-50",
-            )}
+        <div className={cn("mt-0.5 first:mt-0")}>
+          <TreeItemContainer
+            paddingLeft={paddingLeft}
+            showLines={context.showLines}
+            depth={depth}
+            isSelected={isSelected}
+            isDisabled={isDisabled}
+            disableSelection={context.disableSelection}
           >
             {context.showCheckboxes && (
               <Checkbox value={node.id} disabled={isDisabled} />
@@ -454,7 +535,7 @@ function TreeItemInternal<TData = unknown>({
             >
               {context.renderItem(node)}
             </div>
-          </div>
+          </TreeItemContainer>
         </div>
       </TreeItemContext.Provider>
     );
@@ -475,50 +556,40 @@ function TreeItemInternal<TData = unknown>({
           open={isExpanded}
           onOpenChange={() => !isDisabled && context.onToggleNode(node.id)}
         >
-          <div className="group relative flex" style={{ paddingLeft }}>
-            {context.showLines && depth > 0 && (
-              <VerticalLine paddingLeft={paddingLeft} />
-            )}
-
-            <div
+          <TreeItemContainer
+            paddingLeft={paddingLeft}
+            showLines={context.showLines}
+            depth={depth}
+            isSelected={isSelected}
+            isDisabled={isDisabled}
+            disableSelection={context.disableSelection}
+          >
+            {context.showCheckboxes && <ParentCheckbox disabled={isDisabled} />}
+            <BaseCollapsible.Trigger
               className={cn(
-                "flex w-full flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
-                "hover:bg-accent",
-                isSelected &&
-                  !context.disableSelection &&
-                  "bg-accent text-accent-foreground",
-                isDisabled && "cursor-not-allowed opacity-50",
+                "group/trigger -mx-2 -my-1.5 flex flex-1 items-center gap-2 rounded-md border-0 bg-transparent px-2 py-1.5 text-left transition-colors outline-none",
+                "focus-visible:bg-accent focus-visible:ring-ring/50 focus-visible:ring-2",
+                !isDisabled && "cursor-pointer",
               )}
+              onClick={(e) => {
+                if (!isDisabled && !context.disableSelection) {
+                  handleClick(e);
+                }
+              }}
+              onKeyDown={handleKeyDown}
+              disabled={isDisabled}
+              tabIndex={isDisabled ? -1 : 0}
             >
-              {context.showCheckboxes && (
-                <ParentCheckbox disabled={isDisabled} />
-              )}
-              <BaseCollapsible.Trigger
+              <ChevronRightIcon
                 className={cn(
-                  "group/trigger -mx-2 -my-1.5 flex flex-1 items-center gap-2 rounded-md border-0 bg-transparent px-2 py-1.5 text-left transition-colors outline-none",
-                  "focus-visible:bg-accent focus-visible:ring-ring/50 focus-visible:ring-2",
-                  !isDisabled && "cursor-pointer",
+                  "text-muted-foreground ease-out-cubic size-4 shrink-0 transition-transform duration-325",
+                  isExpanded && "rotate-90",
+                  isDisabled && "opacity-50",
                 )}
-                onClick={(e) => {
-                  if (!isDisabled && !context.disableSelection) {
-                    handleClick(e);
-                  }
-                }}
-                onKeyDown={handleKeyDown}
-                disabled={isDisabled}
-                tabIndex={isDisabled ? -1 : 0}
-              >
-                <ChevronRightIcon
-                  className={cn(
-                    "text-muted-foreground ease-out-cubic size-4 shrink-0 transition-transform duration-325",
-                    isExpanded && "rotate-90",
-                    isDisabled && "opacity-50",
-                  )}
-                />
-                {context.renderItem(node)}
-              </BaseCollapsible.Trigger>
-            </div>
-          </div>
+              />
+              {context.renderItem(node)}
+            </BaseCollapsible.Trigger>
+          </TreeItemContainer>
 
           <BaseCollapsible.Panel
             className={cn(
@@ -536,7 +607,7 @@ function TreeItemInternal<TData = unknown>({
               {context.showLines && (
                 <div
                   className="bg-border absolute top-0 bottom-0 w-px"
-                  style={{ left: paddingLeft + 15.5 }}
+                  style={{ left: paddingLeft + CHILD_VERTICAL_LINE_OFFSET }}
                 />
               )}
               {node.children?.map((child) => (
