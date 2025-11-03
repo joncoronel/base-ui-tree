@@ -4,8 +4,7 @@ import * as React from "react";
 import { Collapsible as BaseCollapsible } from "@base-ui-components/react/collapsible";
 import { CheckboxGroup } from "@base-ui-components/react/checkbox-group";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Checkbox as BaseCheckbox } from "@base-ui-components/react/checkbox";
-import { ChevronRightIcon, CheckIcon, MinusIcon } from "lucide-react";
+import { ChevronRightIcon } from "lucide-react";
 import { mergeProps } from "@base-ui-components/react";
 import { useRender } from "@base-ui-components/react/use-render";
 import { cn } from "@/lib/utils";
@@ -44,6 +43,11 @@ interface TreeContextValue<TData = unknown> {
   showLines: boolean;
   showCheckboxes: boolean;
   disableSelection: boolean;
+  focusableNodes: React.MutableRefObject<Map<string, HTMLElement>>;
+  visibleNodeIds: string[];
+  disabledNodesMap: Map<string, boolean>;
+  lastFocusedNodeId: string | null;
+  setLastFocusedNodeId: (nodeId: string | null) => void;
 }
 
 const TreeContext = React.createContext<TreeContextValue | null>(null);
@@ -121,6 +125,11 @@ function Tree<TData = unknown>({
     new Set(defaultExpanded),
   );
 
+  const focusableNodes = React.useRef<Map<string, HTMLElement>>(new Map());
+  const [lastFocusedNodeId, setLastFocusedNodeId] = React.useState<
+    string | null
+  >(null);
+
   const expandedNodes = React.useMemo(() => {
     return expanded ? new Set(expanded) : internalExpanded;
   }, [expanded, internalExpanded]);
@@ -147,6 +156,27 @@ function Tree<TData = unknown>({
     return checkedNodes ? new Set(checkedNodes) : undefined;
   }, [checkedNodes]);
 
+  // Compute visible node IDs and disabled node map synchronously so it's available on first render
+  const { visibleNodeIds, disabledNodesMap } = React.useMemo(() => {
+    const ids: string[] = [];
+    const disabledMap = new Map<string, boolean>();
+
+    const collectVisibleIds = (nodes: TreeNode<TData>[]): void => {
+      for (const node of nodes) {
+        ids.push(node.id);
+        if (node.disabled) {
+          disabledMap.set(node.id, true);
+        }
+        if (node.children && expandedNodes.has(node.id)) {
+          collectVisibleIds(node.children);
+        }
+      }
+    };
+
+    collectVisibleIds(data);
+    return { visibleNodeIds: ids, disabledNodesMap: disabledMap };
+  }, [data, expandedNodes]);
+
   const contextValue = React.useMemo(
     () => ({
       selectedNode,
@@ -160,6 +190,11 @@ function Tree<TData = unknown>({
       showLines,
       showCheckboxes,
       disableSelection,
+      focusableNodes,
+      visibleNodeIds,
+      disabledNodesMap,
+      lastFocusedNodeId,
+      setLastFocusedNodeId,
     }),
     [
       selectedNode,
@@ -173,6 +208,9 @@ function Tree<TData = unknown>({
       showLines,
       showCheckboxes,
       disableSelection,
+      visibleNodeIds,
+      disabledNodesMap,
+      lastFocusedNodeId,
     ],
   );
 
@@ -227,33 +265,18 @@ function VerticalLine({ paddingLeft }: VerticalLineProps) {
 
 interface ParentCheckboxProps {
   disabled?: boolean;
+  onKeyDown?: (e: React.KeyboardEvent) => void;
 }
 
-function ParentCheckbox({ disabled }: ParentCheckboxProps) {
+function ParentCheckbox({ disabled, onKeyDown }: ParentCheckboxProps) {
   return (
-    <BaseCheckbox.Root
+    <Checkbox
       parent
       disabled={disabled}
       onClick={(e) => e.stopPropagation()}
-      className={cn(
-        "peer bg-input border-border focus-visible:outline-ring/20 mr-2 flex size-4 items-center justify-center rounded-[.25rem] border shadow-[0_1px_2px_0_oklch(0.18_0_0_/_0.08)] outline-0 transition-colors duration-0 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-60",
-        "data-checked:border-primary data-checked:bg-primary data-checked:text-primary-foreground",
-        "data-[indeterminate]:border-primary data-[indeterminate]:bg-primary data-[indeterminate]:text-primary-foreground",
-      )}
-    >
-      <BaseCheckbox.Indicator
-        className="block data-[unchecked]:hidden"
-        render={(props, state) => (
-          <span {...props}>
-            {state.indeterminate ? (
-              <MinusIcon className="size-3.5" />
-            ) : (
-              <CheckIcon className="size-3.5" />
-            )}
-          </span>
-        )}
-      />
-    </BaseCheckbox.Root>
+      onKeyDown={onKeyDown}
+      className="mr-2"
+    />
   );
 }
 
@@ -321,7 +344,7 @@ function TreeItemContainer({
   children,
 }: TreeItemContainerProps) {
   return (
-    <div className="group relative flex" style={{ paddingLeft }}>
+    <div className="group relative flex select-none" style={{ paddingLeft }}>
       {showLines && depth > 0 && <VerticalLine paddingLeft={paddingLeft} />}
       <div
         className={cn(
@@ -425,223 +448,362 @@ interface TreeItemInternalProps<TData = unknown> {
   depth: number;
 }
 
-function TreeItemInternal<TData = unknown>({
-  node,
-  depth,
-}: TreeItemInternalProps<TData>): React.ReactElement {
-  const context = useTreeContext<TData>();
+const TreeItemInternal = React.memo(
+  function TreeItemInternal<TData = unknown>({
+    node,
+    depth,
+  }: TreeItemInternalProps<TData>): React.ReactElement {
+    const context = useTreeContext<TData>();
 
-  const hasChildren = Boolean(node.children && node.children.length > 0);
-  const isExpanded = context.expandedNodes.has(node.id);
-  const isSelected = context.selectedNode === node.id;
-  const isDisabled = node.disabled || false;
+    const hasChildren = Boolean(node.children && node.children.length > 0);
+    const isExpanded = context.expandedNodes.has(node.id);
+    const isSelected = context.selectedNode === node.id;
+    const isDisabled = node.disabled || false;
 
-  const itemContextValue = React.useMemo(
-    () => ({
-      item: node,
-      depth,
-      isExpanded,
-      isSelected,
-      hasChildren,
-    }),
-    [node, depth, isExpanded, isSelected, hasChildren],
-  );
+    // Roving tabindex: only the last focused node should be tabbable
+    // If no node has been focused yet, the first node is tabbable
+    const isFirstNode = context.visibleNodeIds[0] === node.id;
+    const isLastFocused = context.lastFocusedNodeId === node.id;
+    const isTabbable =
+      isLastFocused || (!context.lastFocusedNodeId && isFirstNode);
 
-  const handleClick = React.useCallback(
-    (e: React.MouseEvent) => {
-      if (isDisabled || context.disableSelection) return;
-      e.stopPropagation();
-      context.onNodeSelect?.(node.id);
-    },
-    [context, node.id, isDisabled],
-  );
+    const itemContextValue = React.useMemo(
+      () => ({
+        item: node,
+        depth,
+        isExpanded,
+        isSelected,
+        hasChildren,
+      }),
+      [node, depth, isExpanded, isSelected, hasChildren],
+    );
 
-  const handleKeyDown = React.useCallback(
-    (e: React.KeyboardEvent) => {
-      if (isDisabled) return;
+    const handleClick = React.useCallback(
+      (e: React.MouseEvent) => {
+        if (isDisabled || context.disableSelection) return;
+        e.stopPropagation();
+        context.onNodeSelect?.(node.id);
+      },
+      [context, node.id, isDisabled],
+    );
 
-      switch (e.key) {
-        case "Enter":
-        case " ":
-          e.preventDefault();
-          if (hasChildren) {
-            context.onToggleNode(node.id);
+    const handleKeyDown = React.useCallback(
+      (e: React.KeyboardEvent) => {
+        if (isDisabled) return;
+
+        const currentIndex = context.visibleNodeIds.indexOf(node.id);
+
+        switch (e.key) {
+          case "Enter":
+          case " ":
+            e.preventDefault();
+            if (hasChildren) {
+              context.onToggleNode(node.id);
+            }
+            if (!context.disableSelection) {
+              context.onNodeSelect?.(node.id);
+            }
+            break;
+          case "ArrowRight":
+            e.preventDefault();
+            if (hasChildren && !isExpanded) {
+              context.onToggleNode(node.id);
+            }
+            break;
+          case "ArrowLeft":
+            e.preventDefault();
+            if (hasChildren && isExpanded) {
+              context.onToggleNode(node.id);
+            }
+            break;
+          case "ArrowDown": {
+            e.preventDefault();
+            // Find next non-disabled node
+            let nextIndex = currentIndex + 1;
+            while (nextIndex < context.visibleNodeIds.length) {
+              const nextId = context.visibleNodeIds[nextIndex];
+              // Skip if node is disabled
+              if (context.disabledNodesMap.has(nextId)) {
+                nextIndex++;
+                continue;
+              }
+              const nextElement = context.focusableNodes.current.get(nextId);
+              if (nextElement) {
+                nextElement.focus();
+                context.setLastFocusedNodeId(nextId);
+                break;
+              }
+              nextIndex++;
+            }
+            break;
           }
-          if (!context.disableSelection) {
-            context.onNodeSelect?.(node.id);
+          case "ArrowUp": {
+            e.preventDefault();
+            // Find previous non-disabled node
+            let prevIndex = currentIndex - 1;
+            while (prevIndex >= 0) {
+              const prevId = context.visibleNodeIds[prevIndex];
+              // Skip if node is disabled
+              if (context.disabledNodesMap.has(prevId)) {
+                prevIndex--;
+                continue;
+              }
+              const prevElement = context.focusableNodes.current.get(prevId);
+              if (prevElement) {
+                prevElement.focus();
+                context.setLastFocusedNodeId(prevId);
+                break;
+              }
+              prevIndex--;
+            }
+            break;
           }
-          break;
-        case "ArrowRight":
-          e.preventDefault();
-          if (hasChildren && !isExpanded) {
-            context.onToggleNode(node.id);
+          case "Home": {
+            e.preventDefault();
+            // Find first non-disabled node
+            for (let i = 0; i < context.visibleNodeIds.length; i++) {
+              const firstId = context.visibleNodeIds[i];
+              if (context.disabledNodesMap.has(firstId)) continue;
+              const firstElement = context.focusableNodes.current.get(firstId);
+              if (firstElement) {
+                firstElement.focus();
+                context.setLastFocusedNodeId(firstId);
+                break;
+              }
+            }
+            break;
           }
-          break;
-        case "ArrowLeft":
-          e.preventDefault();
-          if (hasChildren && isExpanded) {
-            context.onToggleNode(node.id);
+          case "End": {
+            e.preventDefault();
+            // Find last non-disabled node
+            for (let i = context.visibleNodeIds.length - 1; i >= 0; i--) {
+              const lastId = context.visibleNodeIds[i];
+              if (context.disabledNodesMap.has(lastId)) continue;
+              const lastElement = context.focusableNodes.current.get(lastId);
+              if (lastElement) {
+                lastElement.focus();
+                context.setLastFocusedNodeId(lastId);
+                break;
+              }
+            }
+            break;
           }
-          break;
-      }
-    },
-    [hasChildren, isExpanded, context, node.id, isDisabled],
-  );
+        }
+      },
+      [hasChildren, isExpanded, context, node.id, isDisabled],
+    );
 
-  const paddingLeft =
-    depth * (context.showCheckboxes ? INDENT_SIZE_WITH_CHECKBOX : INDENT_SIZE);
+    const paddingLeft =
+      depth *
+      (context.showCheckboxes ? INDENT_SIZE_WITH_CHECKBOX : INDENT_SIZE);
 
-  // ============================================================================
-  // ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS
-  // ============================================================================
+    // ============================================================================
+    // ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS
+    // ============================================================================
 
-  // Checkbox state management (extracted to custom hook for clarity)
-  const { allDescendantIds, localChildValues, handleLocalCheckboxChange } =
-    useTreeCheckboxState({
-      node,
-      hasChildren,
-      context,
-    });
+    // Checkbox state management (extracted to custom hook for clarity)
+    const { allDescendantIds, localChildValues, handleLocalCheckboxChange } =
+      useTreeCheckboxState({
+        node,
+        hasChildren,
+        context,
+      });
 
-  // ============================================================================
-  // NOW SAFE TO HAVE CONDITIONAL RETURNS
-  // ============================================================================
+    // ============================================================================
+    // NOW SAFE TO HAVE CONDITIONAL RETURNS
+    // ============================================================================
 
-  // Render leaf node (no children)
-  if (!hasChildren) {
-    return (
-      <TreeItemContext.Provider value={itemContextValue}>
-        <div className={cn("mt-0.5 first:mt-0")}>
-          <TreeItemContainer
-            paddingLeft={paddingLeft}
-            showLines={context.showLines}
-            depth={depth}
-            isSelected={isSelected}
-            isDisabled={isDisabled}
-            disableSelection={context.disableSelection}
-          >
-            {context.showCheckboxes && (
-              <Checkbox value={node.id} disabled={isDisabled} />
-            )}
-            <div
-              className={cn(
-                "-my-1.5 flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 transition-colors outline-none",
-                context.showCheckboxes ? "-mr-2" : "-mx-2",
-                "focus-visible:bg-accent focus-visible:ring-ring/50 focus-visible:ring-2",
-                !isDisabled && "cursor-pointer",
-              )}
-              onClick={handleClick}
-              onKeyDown={handleKeyDown}
-              role="treeitem"
-              aria-selected={isSelected}
-              aria-disabled={isDisabled}
-              tabIndex={isDisabled ? -1 : 0}
+    // Render leaf node (no children)
+    if (!hasChildren) {
+      return (
+        <TreeItemContext.Provider value={itemContextValue}>
+          <div className={cn("mt-0.5 first:mt-0")}>
+            <TreeItemContainer
+              paddingLeft={paddingLeft}
+              showLines={context.showLines}
+              depth={depth}
+              isSelected={isSelected}
+              isDisabled={isDisabled}
+              disableSelection={context.disableSelection}
             >
-              {context.renderItem(node)}
-            </div>
-          </TreeItemContainer>
+              {context.showCheckboxes && (
+                <Checkbox
+                  value={node.id}
+                  disabled={isDisabled}
+                  onKeyDown={(e: React.KeyboardEvent) => {
+                    // Right arrow moves from checkbox to tree item
+                    if (e.key === "ArrowRight") {
+                      e.preventDefault();
+                      const treeItemElement =
+                        context.focusableNodes.current.get(node.id);
+                      treeItemElement?.focus();
+                    }
+                  }}
+                />
+              )}
+              <div
+                ref={(el) => {
+                  if (el) {
+                    context.focusableNodes.current.set(node.id, el);
+                  } else {
+                    context.focusableNodes.current.delete(node.id);
+                  }
+                }}
+                className={cn(
+                  "-my-1.5 flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 transition-colors outline-none select-none",
+                  context.showCheckboxes ? "-mr-2" : "-mx-2",
+                  "focus-visible:bg-accent focus-visible:ring-ring/50 focus-visible:ring-2",
+                  !isDisabled && "cursor-pointer",
+                )}
+                onClick={handleClick}
+                onKeyDown={handleKeyDown}
+                onFocus={() => {
+                  context.setLastFocusedNodeId(node.id);
+                }}
+                role="treeitem"
+                aria-selected={isSelected}
+                aria-disabled={isDisabled}
+                tabIndex={isDisabled ? -1 : isTabbable ? 0 : -1}
+              >
+                {context.renderItem(node)}
+              </div>
+            </TreeItemContainer>
+          </div>
+        </TreeItemContext.Provider>
+      );
+    }
+
+    // Render parent node (has children)
+
+    const parentContent = (
+      <TreeItemContext.Provider value={itemContextValue}>
+        <div
+          role="treeitem"
+          aria-expanded={isExpanded}
+          aria-selected={isSelected}
+          aria-disabled={isDisabled}
+          className={cn("mt-0.5 first:mt-0")}
+        >
+          <BaseCollapsible.Root
+            open={isExpanded}
+            onOpenChange={() => !isDisabled && context.onToggleNode(node.id)}
+          >
+            <TreeItemContainer
+              paddingLeft={paddingLeft}
+              showLines={context.showLines}
+              depth={depth}
+              isSelected={isSelected}
+              isDisabled={isDisabled}
+              disableSelection={context.disableSelection}
+            >
+              {context.showCheckboxes && (
+                <ParentCheckbox
+                  disabled={isDisabled}
+                  onKeyDown={(e: React.KeyboardEvent) => {
+                    // Right arrow moves from checkbox to tree item
+                    if (e.key === "ArrowRight") {
+                      e.preventDefault();
+                      const treeItemElement =
+                        context.focusableNodes.current.get(node.id);
+                      treeItemElement?.focus();
+                    }
+                  }}
+                />
+              )}
+              <BaseCollapsible.Trigger
+                ref={(el) => {
+                  if (el) {
+                    context.focusableNodes.current.set(node.id, el);
+                  } else {
+                    context.focusableNodes.current.delete(node.id);
+                  }
+                }}
+                className={cn(
+                  "group/trigger -mx-2 -my-1.5 flex flex-1 items-center gap-2 rounded-md border-0 bg-transparent px-2 py-1.5 text-left transition-colors outline-none select-none",
+                  "focus-visible:bg-accent focus-visible:ring-ring/50 focus-visible:ring-2",
+                  !isDisabled && "cursor-pointer",
+                )}
+                onClick={(e) => {
+                  if (!isDisabled && !context.disableSelection) {
+                    handleClick(e);
+                  }
+                }}
+                onKeyDown={handleKeyDown}
+                onFocus={() => {
+                  context.setLastFocusedNodeId(node.id);
+                }}
+                disabled={isDisabled}
+                tabIndex={isDisabled ? -1 : isTabbable ? 0 : -1}
+              >
+                <ChevronRightIcon
+                  aria-hidden="true"
+                  className={cn(
+                    "text-muted-foreground ease-out-cubic size-4 shrink-0 transition-transform duration-325",
+                    isExpanded && "rotate-90",
+                    isDisabled && "opacity-50",
+                  )}
+                />
+                {context.renderItem(node)}
+              </BaseCollapsible.Trigger>
+            </TreeItemContainer>
+
+            <BaseCollapsible.Panel
+              className={cn(
+                "ease-out-cubic h-[var(--collapsible-panel-height)] overflow-y-clip transition-all duration-325",
+                "data-[ending-style]:h-0 data-[ending-style]:opacity-0",
+                "data-[starting-style]:h-0 data-[starting-style]:opacity-0",
+              )}
+            >
+              <div
+                className={cn(
+                  context.showLines && "relative",
+                  "pt-0.5 pb-0.5 pl-0",
+                )}
+              >
+                {context.showLines && (
+                  <div
+                    className="bg-border absolute top-0 bottom-0 w-px"
+                    style={{ left: paddingLeft + CHILD_VERTICAL_LINE_OFFSET }}
+                  />
+                )}
+                {node.children?.map((child) => (
+                  <TreeItemInternal
+                    key={child.id}
+                    node={child}
+                    depth={depth + 1}
+                  />
+                ))}
+              </div>
+            </BaseCollapsible.Panel>
+          </BaseCollapsible.Root>
         </div>
       </TreeItemContext.Provider>
     );
-  }
 
-  // Render parent node (has children)
-
-  const parentContent = (
-    <TreeItemContext.Provider value={itemContextValue}>
-      <div
-        role="treeitem"
-        aria-expanded={isExpanded}
-        aria-selected={isSelected}
-        aria-disabled={isDisabled}
-        className={cn("mt-0.5 first:mt-0")}
-      >
-        <BaseCollapsible.Root
-          open={isExpanded}
-          onOpenChange={() => !isDisabled && context.onToggleNode(node.id)}
+    if (context.showCheckboxes) {
+      return (
+        <CheckboxGroup
+          value={localChildValues}
+          onValueChange={handleLocalCheckboxChange}
+          allValues={allDescendantIds}
         >
-          <TreeItemContainer
-            paddingLeft={paddingLeft}
-            showLines={context.showLines}
-            depth={depth}
-            isSelected={isSelected}
-            isDisabled={isDisabled}
-            disableSelection={context.disableSelection}
-          >
-            {context.showCheckboxes && <ParentCheckbox disabled={isDisabled} />}
-            <BaseCollapsible.Trigger
-              className={cn(
-                "group/trigger -mx-2 -my-1.5 flex flex-1 items-center gap-2 rounded-md border-0 bg-transparent px-2 py-1.5 text-left transition-colors outline-none",
-                "focus-visible:bg-accent focus-visible:ring-ring/50 focus-visible:ring-2",
-                !isDisabled && "cursor-pointer",
-              )}
-              onClick={(e) => {
-                if (!isDisabled && !context.disableSelection) {
-                  handleClick(e);
-                }
-              }}
-              onKeyDown={handleKeyDown}
-              disabled={isDisabled}
-              tabIndex={isDisabled ? -1 : 0}
-            >
-              <ChevronRightIcon
-                className={cn(
-                  "text-muted-foreground ease-out-cubic size-4 shrink-0 transition-transform duration-325",
-                  isExpanded && "rotate-90",
-                  isDisabled && "opacity-50",
-                )}
-              />
-              {context.renderItem(node)}
-            </BaseCollapsible.Trigger>
-          </TreeItemContainer>
+          {parentContent}
+        </CheckboxGroup>
+      );
+    }
 
-          <BaseCollapsible.Panel
-            className={cn(
-              "ease-out-cubic h-[var(--collapsible-panel-height)] overflow-y-clip transition-all duration-325",
-              "data-[ending-style]:h-0 data-[ending-style]:opacity-0",
-              "data-[starting-style]:h-0 data-[starting-style]:opacity-0",
-            )}
-          >
-            <div
-              className={cn(
-                context.showLines && "relative",
-                "pt-0.5 pb-0.5 pl-0",
-              )}
-            >
-              {context.showLines && (
-                <div
-                  className="bg-border absolute top-0 bottom-0 w-px"
-                  style={{ left: paddingLeft + CHILD_VERTICAL_LINE_OFFSET }}
-                />
-              )}
-              {node.children?.map((child) => (
-                <TreeItemInternal
-                  key={child.id}
-                  node={child}
-                  depth={depth + 1}
-                />
-              ))}
-            </div>
-          </BaseCollapsible.Panel>
-        </BaseCollapsible.Root>
-      </div>
-    </TreeItemContext.Provider>
-  );
-
-  if (context.showCheckboxes) {
+    return parentContent;
+  },
+  (prevProps, nextProps) => {
+    // Only re-render if the node reference or depth changed
+    // This prevents re-renders when context values like lastFocusedNodeId change
     return (
-      <CheckboxGroup
-        value={localChildValues}
-        onValueChange={handleLocalCheckboxChange}
-        allValues={allDescendantIds}
-      >
-        {parentContent}
-      </CheckboxGroup>
+      prevProps.node === nextProps.node && prevProps.depth === nextProps.depth
     );
-  }
-
-  return parentContent;
-}
+  },
+) as <TData = unknown>(
+  props: TreeItemInternalProps<TData>,
+) => React.ReactElement;
 
 // ============================================================================
 // TreeItem Component (Public API)

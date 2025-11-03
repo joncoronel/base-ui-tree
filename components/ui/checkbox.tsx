@@ -22,13 +22,16 @@ function Checkbox({
       <BaseCheckbox.Indicator
         data-slot="checkbox-indicator"
         className="block data-[unchecked]:hidden"
-      >
-        {props.indeterminate ? (
-          <MinusIcon className="size-3.5" />
-        ) : (
-          <CheckIcon className="size-3.5" />
+        render={(indicatorProps, state) => (
+          <span {...indicatorProps}>
+            {state.indeterminate ? (
+              <MinusIcon className="size-3.5" />
+            ) : (
+              <CheckIcon className="size-3.5" />
+            )}
+          </span>
         )}
-      </BaseCheckbox.Indicator>
+      />
     </BaseCheckbox.Root>
   );
 }
