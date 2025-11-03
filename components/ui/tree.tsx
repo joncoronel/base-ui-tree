@@ -46,6 +46,7 @@ interface TreeContextValue<TData = unknown> {
   focusableNodes: React.MutableRefObject<Map<string, HTMLElement>>;
   visibleNodeIds: string[];
   disabledNodesMap: Map<string, boolean>;
+  parentNodeMap: Map<string, string>;
   lastFocusedNodeId: string | null;
   setLastFocusedNodeId: (nodeId: string | null) => void;
   data: TreeNode<TData>[];
@@ -157,6 +158,28 @@ function Tree<TData = unknown>({
     return checkedNodes ? new Set(checkedNodes) : undefined;
   }, [checkedNodes]);
 
+  // Compute parent node map for ALL nodes (not just visible ones)
+  const parentNodeMap = React.useMemo(() => {
+    const parentMap = new Map<string, string>();
+
+    const buildParentMap = (
+      nodes: TreeNode<TData>[],
+      parentId?: string,
+    ): void => {
+      for (const node of nodes) {
+        if (parentId) {
+          parentMap.set(node.id, parentId);
+        }
+        if (node.children) {
+          buildParentMap(node.children, node.id);
+        }
+      }
+    };
+
+    buildParentMap(data);
+    return parentMap;
+  }, [data]);
+
   // Compute visible node IDs and disabled node map synchronously so it's available on first render
   const { visibleNodeIds, disabledNodesMap } = React.useMemo(() => {
     const ids: string[] = [];
@@ -194,6 +217,7 @@ function Tree<TData = unknown>({
       focusableNodes,
       visibleNodeIds,
       disabledNodesMap,
+      parentNodeMap,
       lastFocusedNodeId,
       setLastFocusedNodeId,
       data,
@@ -212,6 +236,7 @@ function Tree<TData = unknown>({
       disableSelection,
       visibleNodeIds,
       disabledNodesMap,
+      parentNodeMap,
       lastFocusedNodeId,
       data,
     ],
@@ -612,7 +637,19 @@ const TreeItemInternal = React.memo(
           case "ArrowLeft":
             e.preventDefault();
             if (hasChildren && isExpanded) {
+              // If node is expanded, collapse it
               context.onToggleNode(node.id);
+            } else {
+              // If node is collapsed or is a leaf, focus parent
+              const parentId = context.parentNodeMap.get(node.id);
+              if (parentId) {
+                const parentElement =
+                  context.focusableNodes.current.get(parentId);
+                if (parentElement) {
+                  parentElement.focus();
+                  context.setLastFocusedNodeId(parentId);
+                }
+              }
             }
             break;
           case "ArrowDown": {
