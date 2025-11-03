@@ -5,12 +5,7 @@ import { Collapsible as BaseCollapsible } from "@base-ui-components/react/collap
 import { CheckboxGroup } from "@base-ui-components/react/checkbox-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Checkbox as BaseCheckbox } from "@base-ui-components/react/checkbox";
-import {
-  ChevronRightIcon,
-  LoaderIcon,
-  CheckIcon,
-  MinusIcon,
-} from "lucide-react";
+import { ChevronRightIcon, CheckIcon, MinusIcon } from "lucide-react";
 import { mergeProps } from "@base-ui-components/react";
 import { useRender } from "@base-ui-components/react/use-render";
 import { cn } from "@/lib/utils";
@@ -263,6 +258,33 @@ function ParentCheckbox({ disabled }: ParentCheckboxProps) {
 }
 
 // ============================================================================
+// Helper Functions - Defined outside component for stable references
+// ============================================================================
+
+function getAllDescendantIds<TData>(children: TreeNode<TData>[]): string[] {
+  const ids: string[] = [];
+  for (const child of children) {
+    ids.push(child.id);
+    if (child.children && child.children.length > 0) {
+      ids.push(...getAllDescendantIds(child.children));
+    }
+  }
+  return ids;
+}
+
+function getLeafNodeIds<TData>(nodes: TreeNode<TData>[]): string[] {
+  const leafIds: string[] = [];
+  for (const childNode of nodes) {
+    if (!childNode.children || childNode.children.length === 0) {
+      leafIds.push(childNode.id);
+    } else {
+      leafIds.push(...getLeafNodeIds(childNode.children));
+    }
+  }
+  return leafIds;
+}
+
+// ============================================================================
 // TreeItemInternal - Handles recursion internally
 // ============================================================================
 
@@ -336,6 +358,61 @@ function TreeItemInternal<TData = unknown>({
 
   const paddingLeft = depth * (context.showCheckboxes ? 12 : 20);
 
+  // ============================================================================
+  // ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS
+  // ============================================================================
+
+  // Memoize the results of calling helper functions (defined outside component)
+  const allDescendantIds = React.useMemo(
+    () => (hasChildren ? getAllDescendantIds(node.children || []) : []),
+    [hasChildren, node.children],
+  );
+
+  const allLeafIds = React.useMemo(
+    () => (hasChildren ? getLeafNodeIds(node.children || []) : []),
+    [hasChildren, node.children],
+  );
+
+  const localChildValues = React.useMemo(() => {
+    if (!hasChildren || !context.checkedNodes || !context.showCheckboxes)
+      return [];
+    return allDescendantIds.filter((id) => context.checkedNodes!.has(id));
+  }, [
+    hasChildren,
+    context.checkedNodes,
+    allDescendantIds,
+    context.showCheckboxes,
+  ]);
+
+  const handleLocalCheckboxChange = React.useCallback(
+    (newValues: string[]) => {
+      if (!context.onCheckedNodesChange || !context.checkedNodes) return;
+
+      const currentSet = new Set(context.checkedNodes);
+
+      // Remove all descendants
+      allDescendantIds.forEach((id) => currentSet.delete(id));
+
+      // Add back the selected values (these are all descendants now)
+      newValues.forEach((id) => currentSet.add(id));
+
+      // Update this parent's checked status
+      // Parent is checked if all leaf descendants are checked
+      if (newValues.length === allLeafIds.length) {
+        currentSet.add(node.id);
+      } else {
+        currentSet.delete(node.id);
+      }
+
+      context.onCheckedNodesChange(Array.from(currentSet));
+    },
+    [context, allDescendantIds, allLeafIds, node.id],
+  );
+
+  // ============================================================================
+  // NOW SAFE TO HAVE CONDITIONAL RETURNS
+  // ============================================================================
+
   // Render leaf node (no children)
   if (!hasChildren) {
     return (
@@ -384,81 +461,6 @@ function TreeItemInternal<TData = unknown>({
   }
 
   // Render parent node (has children)
-  const allChildIds = React.useMemo(
-    () => node.children?.map((child) => child.id) || [],
-    [node.children],
-  );
-
-  const getAllDescendantIds = React.useCallback(
-    (children: TreeNode<TData>[]): string[] => {
-      const ids: string[] = [];
-      for (const child of children) {
-        ids.push(child.id);
-        if (child.children && child.children.length > 0) {
-          ids.push(...getAllDescendantIds(child.children));
-        }
-      }
-      return ids;
-    },
-    [],
-  );
-
-  const allDescendantIds = React.useMemo(
-    () => getAllDescendantIds(node.children || []),
-    [node.children, getAllDescendantIds],
-  );
-
-  // Get only leaf node IDs for CheckboxGroup allValues
-  const getLeafNodeIds = React.useCallback(
-    (nodes: TreeNode<TData>[]): string[] => {
-      const leafIds: string[] = [];
-      for (const childNode of nodes) {
-        if (!childNode.children || childNode.children.length === 0) {
-          leafIds.push(childNode.id);
-        } else {
-          leafIds.push(...getLeafNodeIds(childNode.children));
-        }
-      }
-      return leafIds;
-    },
-    [],
-  );
-
-  const allLeafIds = React.useMemo(
-    () => getLeafNodeIds(node.children || []),
-    [node.children, getLeafNodeIds],
-  );
-
-  const localChildValues = React.useMemo(() => {
-    if (!context.checkedNodes || !context.showCheckboxes) return [];
-    // Use all descendants, not just immediate children
-    return allDescendantIds.filter((id) => context.checkedNodes!.has(id));
-  }, [context.checkedNodes, allDescendantIds, context.showCheckboxes]);
-
-  const handleLocalCheckboxChange = React.useCallback(
-    (newValues: string[]) => {
-      if (!context.onCheckedNodesChange || !context.checkedNodes) return;
-
-      const currentSet = new Set(context.checkedNodes);
-
-      // Remove all descendants
-      allDescendantIds.forEach((id) => currentSet.delete(id));
-
-      // Add back the selected values (these are all descendants now)
-      newValues.forEach((id) => currentSet.add(id));
-
-      // Update this parent's checked status
-      // Parent is checked if all leaf descendants are checked
-      if (newValues.length === allLeafIds.length) {
-        currentSet.add(node.id);
-      } else {
-        currentSet.delete(node.id);
-      }
-
-      context.onCheckedNodesChange(Array.from(currentSet));
-    },
-    [context, allDescendantIds, allLeafIds, node.id],
-  );
 
   const parentContent = (
     <TreeItemContext.Provider value={itemContextValue}>
