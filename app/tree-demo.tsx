@@ -4,12 +4,12 @@ import * as React from "react";
 import {
   Tree,
   TreeItem,
-  TreeItemContent,
   TreeItemIcon,
   TreeItemLabel,
   TreeItemBadge,
   type TreeNode,
   type TreeVariant,
+  type TreeMode,
 } from "@/components/ui/tree";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -24,7 +24,6 @@ import {
   ImageIcon,
   CodeIcon,
   PackageIcon,
-  LoaderIcon,
   MoonIcon,
   SunIcon,
   SlidersHorizontalIcon,
@@ -175,9 +174,8 @@ export default function TreeDemo() {
   }, []);
 
   // Feature toggles
-  const [enableBulkActions, setEnableBulkActions] = React.useState(true);
+  const [mode, setMode] = React.useState<TreeMode>("multiple");
   const [showLines, setShowLines] = React.useState(false);
-  const [disableSelection, setDisableSelection] = React.useState(true);
   const [variant, setVariant] = React.useState<TreeVariant>("outline");
 
   return (
@@ -206,20 +204,14 @@ export default function TreeDemo() {
           onCheckedNodesChange={setCheckedNodes}
           variant={variant}
           showLines={showLines}
-          enableBulkActions={enableBulkActions}
-          disableSelection={disableSelection}
+          mode={mode}
           defaultExpanded={["src", "components"]}
         >
           {(item) => (
-            <TreeItem item={item}>
-              <TreeItemContent>
-                {item.icon && <TreeItemIcon>{item.icon}</TreeItemIcon>}
-                <TreeItemLabel>{item.name}</TreeItemLabel>
-                {item.loading && (
-                  <LoaderIcon className="text-muted-foreground size-4 animate-spin" />
-                )}
-                {item.badge && <TreeItemBadge>{item.badge}</TreeItemBadge>}
-              </TreeItemContent>
+            <TreeItem>
+              {item.icon && <TreeItemIcon>{item.icon}</TreeItemIcon>}
+              <TreeItemLabel>{item.name}</TreeItemLabel>
+              {item.badge && <TreeItemBadge>{item.badge}</TreeItemBadge>}
             </TreeItem>
           )}
         </Tree>
@@ -233,18 +225,42 @@ export default function TreeDemo() {
           </DrawerTrigger>
           <DrawerContent>
             <div className="grid gap-3 p-5 pt-6">
-              {/* Feature Toggles */}
+              {/* Mode Selection */}
               <div className="flex items-center justify-between">
-                <Label htmlFor="checkboxes-mobile" className="cursor-pointer">
-                  Enable Bulk Actions
+                <Label htmlFor="mode-single-mobile" className="cursor-pointer">
+                  Single Selection
                 </Label>
                 <Switch
-                  id="checkboxes-mobile"
-                  checked={enableBulkActions}
+                  id="mode-single-mobile"
+                  checked={mode === "single"}
+                  onCheckedChange={(checked) => checked && setMode("single")}
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <Label htmlFor="mode-multiple-mobile" className="cursor-pointer">
+                  Multiple Selection
+                </Label>
+                <Switch
+                  id="mode-multiple-mobile"
+                  checked={mode === "multiple"}
                   onCheckedChange={(checked) => {
-                    setEnableBulkActions(checked);
-                    if (checked) setShowLines(false);
+                    if (checked) {
+                      setMode("multiple");
+                      setShowLines(false);
+                    }
                   }}
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <Label htmlFor="mode-none-mobile" className="cursor-pointer">
+                  No Selection
+                </Label>
+                <Switch
+                  id="mode-none-mobile"
+                  checked={mode === "none"}
+                  onCheckedChange={(checked) => checked && setMode("none")}
                 />
               </div>
 
@@ -257,22 +273,8 @@ export default function TreeDemo() {
                   checked={showLines}
                   onCheckedChange={(checked) => {
                     setShowLines(checked);
-                    if (checked) setEnableBulkActions(false);
+                    if (checked && mode === "multiple") setMode("single");
                   }}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <Label
-                  htmlFor="disable-selection-mobile"
-                  className="cursor-pointer"
-                >
-                  Disable Selection
-                </Label>
-                <Switch
-                  id="disable-selection-mobile"
-                  checked={disableSelection}
-                  onCheckedChange={setDisableSelection}
                 />
               </div>
 
@@ -295,15 +297,15 @@ export default function TreeDemo() {
 
               <div className="flex items-center justify-between">
                 <Label
-                  htmlFor="variant-nested-mobile"
+                  htmlFor="variant-filled-mobile"
                   className="cursor-pointer"
                 >
                   Filled Variant
                 </Label>
                 <Switch
-                  id="variant-nested-mobile"
-                  checked={variant === "nested"}
-                  onCheckedChange={(checked) => checked && setVariant("nested")}
+                  id="variant-filled-mobile"
+                  checked={variant === "filled"}
+                  onCheckedChange={(checked) => checked && setVariant("filled")}
                 />
               </div>
 
@@ -331,18 +333,42 @@ export default function TreeDemo() {
       <div className="fixed bottom-4 left-1/2 z-50 hidden w-full max-w-3xl -translate-x-1/2 md:block">
         <div className="border-border bg-card/95 supports-[backdrop-filter]:bg-card/90 mx-6 rounded-lg border p-3 shadow-lg backdrop-blur">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {/* Feature Toggles */}
+            {/* Mode Selection */}
             <div className="flex items-center justify-between">
-              <Label htmlFor="checkboxes" className="cursor-pointer">
-                Enable Bulk Actions
+              <Label htmlFor="mode-single" className="cursor-pointer">
+                Single Selection
               </Label>
               <Switch
-                id="checkboxes"
-                checked={enableBulkActions}
+                id="mode-single"
+                checked={mode === "single"}
+                onCheckedChange={(checked) => checked && setMode("single")}
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <Label htmlFor="mode-multiple" className="cursor-pointer">
+                Multiple Selection
+              </Label>
+              <Switch
+                id="mode-multiple"
+                checked={mode === "multiple"}
                 onCheckedChange={(checked) => {
-                  setEnableBulkActions(checked);
-                  if (checked) setShowLines(false);
+                  if (checked) {
+                    setMode("multiple");
+                    setShowLines(false);
+                  }
                 }}
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <Label htmlFor="mode-none" className="cursor-pointer">
+                No Selection
+              </Label>
+              <Switch
+                id="mode-none"
+                checked={mode === "none"}
+                onCheckedChange={(checked) => checked && setMode("none")}
               />
             </div>
 
@@ -355,19 +381,8 @@ export default function TreeDemo() {
                 checked={showLines}
                 onCheckedChange={(checked) => {
                   setShowLines(checked);
-                  if (checked) setEnableBulkActions(false);
+                  if (checked && mode === "multiple") setMode("single");
                 }}
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <Label htmlFor="disable-selection" className="cursor-pointer">
-                Disable Selection
-              </Label>
-              <Switch
-                id="disable-selection"
-                checked={disableSelection}
-                onCheckedChange={setDisableSelection}
               />
             </div>
 
@@ -384,13 +399,13 @@ export default function TreeDemo() {
             </div>
 
             <div className="flex items-center justify-between">
-              <Label htmlFor="variant-nested" className="cursor-pointer">
+              <Label htmlFor="variant-filled" className="cursor-pointer">
                 Filled Variant
               </Label>
               <Switch
-                id="variant-nested"
-                checked={variant === "nested"}
-                onCheckedChange={(checked) => checked && setVariant("nested")}
+                id="variant-filled"
+                checked={variant === "filled"}
+                onCheckedChange={(checked) => checked && setVariant("filled")}
               />
             </div>
 

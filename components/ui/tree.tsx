@@ -1,41 +1,83 @@
 "use client";
 
 import * as React from "react";
-import { Collapsible as BaseCollapsible } from "@base-ui-components/react/collapsible";
-import { CheckboxGroup } from "@base-ui-components/react/checkbox-group";
-import { Checkbox } from "@/components/ui/checkbox";
-import { ChevronRightIcon } from "lucide-react";
-import { mergeProps } from "@base-ui-components/react";
-import { useRender } from "@base-ui-components/react/use-render";
+import { Collapsible as BaseCollapsible } from "@base-ui/react/collapsible";
+import { CheckboxGroup } from "@base-ui/react/checkbox-group";
+import { Checkbox } from "./checkbox";
+import { ChevronRightIcon, Loader2Icon } from "lucide-react";
+import { mergeProps } from "@base-ui/react/merge-props";
+import { useRender } from "@base-ui/react/use-render";
 import { cn } from "@/lib/utils";
+import {
+  getAllDescendantIds,
+  getLeafNodeIds,
+  buildParentMap,
+  collectVisibleIds,
+  handleTreeKeyboardNavigation,
+} from "./tree-utils";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export interface TreeNode<TData = unknown> {
+export interface TreeNodeBase<
+  TData extends Record<string, unknown> = Record<string, unknown>
+> {
   id: string;
   name: string;
-  children?: TreeNode<TData>[];
   data?: TData;
   disabled?: boolean;
   loading?: boolean;
   icon?: React.ReactNode;
-  iconOpen?: React.ReactNode;
   badge?: React.ReactNode;
 }
 
-type TreeVariant = "default" | "nested" | "outline";
+export interface TreeLeafNode<
+  TData extends Record<string, unknown> = Record<string, unknown>
+> extends TreeNodeBase<TData> {
+  children?: never;
+}
+
+export interface TreeParentNode<
+  TData extends Record<string, unknown> = Record<string, unknown>
+> extends TreeNodeBase<TData> {
+  children: TreeNode<TData>[];
+  iconOpen?: React.ReactNode;
+  onLoadChildren?: () => Promise<TreeNode<TData>[]>;
+}
+
+export type TreeNode<
+  TData extends Record<string, unknown> = Record<string, unknown>
+> = TreeLeafNode<TData> | TreeParentNode<TData>;
+
+export interface TreeSelectEvent<
+  TData extends Record<string, unknown> = Record<string, unknown>
+> {
+  nodeId: string;
+  node: TreeNode<TData>;
+  event: React.MouseEvent | React.KeyboardEvent;
+}
+
+export interface TreeExpandEvent {
+  nodeId: string;
+  expanded: boolean;
+}
+
+type TreeVariant = "default" | "filled" | "outline";
+type TreeMode = "single" | "multiple" | "none";
 
 // ============================================================================
 // Context
 // ============================================================================
 
-interface TreeContextValue<TData = unknown> {
+interface TreeContextValue<
+  TData extends Record<string, unknown> = Record<string, unknown>
+> {
+  // Tree-level state
   selectedNode?: string | null;
   onNodeSelect?: (nodeId: string) => void;
   expandedNodes: Set<string>;
-  onToggleNode: (nodeId: string) => void;
+  onToggleNode: (nodeId: string) => void | Promise<void>;
   checkedNodes?: Set<string>;
   onCheckedNodesChange?: (checked: string[]) => void;
   renderItem: (item: TreeNode<TData>) => React.ReactElement;
@@ -46,17 +88,27 @@ interface TreeContextValue<TData = unknown> {
   focusableNodes: React.MutableRefObject<Map<string, HTMLElement>>;
   visibleNodeIds: string[];
   disabledNodesMap: Map<string, boolean>;
+  loadingNodesMap: Map<string, boolean>;
   parentNodeMap: Map<string, string>;
   lastFocusedNodeId: string | null;
   setLastFocusedNodeId: (nodeId: string | null) => void;
   data: TreeNode<TData>[];
+  // Item-level state
+  item?: TreeNode<TData>;
+  depth?: number;
+  isExpanded?: boolean;
+  isSelected?: boolean;
+  hasChildren?: boolean;
+  isLoading?: boolean;
 }
 
 const TreeContext = React.createContext<TreeContextValue | null>(null);
 
-function useTreeContext<TData = unknown>(): TreeContextValue<TData> {
+function useTreeContext<
+  TData extends Record<string, unknown> = Record<string, unknown>
+>(): TreeContextValue<TData> {
   const context = React.useContext(
-    TreeContext,
+    TreeContext
   ) as TreeContextValue<TData> | null;
   if (!context) {
     throw new Error("Tree components must be used within a Tree");
@@ -64,32 +116,36 @@ function useTreeContext<TData = unknown>(): TreeContextValue<TData> {
   return context;
 }
 
-interface TreeItemContextValue<TData = unknown> {
-  item: TreeNode<TData>;
-  depth: number;
-  isExpanded: boolean;
-  isSelected: boolean;
-  hasChildren: boolean;
-}
-
-const TreeItemContext = React.createContext<TreeItemContextValue | null>(null);
-
-function useTreeItemContext<TData = unknown>(): TreeItemContextValue<TData> {
-  const context = React.useContext(
-    TreeItemContext,
-  ) as TreeItemContextValue<TData> | null;
-  if (!context) {
+// Extracts item-level state from context for TreeItem subcomponents
+function useTreeItemContext<
+  TData extends Record<string, unknown> = Record<string, unknown>
+>(): Required<
+  Pick<
+    TreeContextValue<TData>,
+    "item" | "depth" | "isExpanded" | "isSelected" | "hasChildren" | "isLoading"
+  >
+> {
+  const context = useTreeContext<TData>();
+  if (!context.item) {
     throw new Error("TreeItem subcomponents must be used within TreeItem");
   }
-  return context;
+  return {
+    item: context.item,
+    depth: context.depth!,
+    isExpanded: context.isExpanded!,
+    isSelected: context.isSelected!,
+    hasChildren: context.hasChildren!,
+    isLoading: context.isLoading!,
+  };
 }
 
 // ============================================================================
 // Tree Root
 // ============================================================================
 
-export interface TreeProps<TData = unknown>
-  extends Omit<useRender.ComponentProps<"div">, "children"> {
+export interface TreeProps<
+  TData extends Record<string, unknown> = Record<string, unknown>
+> extends Omit<useRender.ComponentProps<"div">, "children"> {
   data: TreeNode<TData>[];
   children: (item: TreeNode<TData>) => React.ReactElement;
   selectedNode?: string | null;
@@ -101,11 +157,10 @@ export interface TreeProps<TData = unknown>
   onCheckedNodesChange?: (checked: string[]) => void;
   variant?: TreeVariant;
   showLines?: boolean;
-  enableBulkActions?: boolean;
-  disableSelection?: boolean;
+  mode?: TreeMode;
 }
 
-function Tree<TData = unknown>({
+function Tree<TData extends Record<string, unknown> = Record<string, unknown>>({
   data,
   children: renderItem,
   selectedNode,
@@ -117,14 +172,21 @@ function Tree<TData = unknown>({
   onCheckedNodesChange,
   variant = "default",
   showLines = false,
-  enableBulkActions = false,
-  disableSelection = false,
+  mode = "single",
   className,
   render,
   ...props
 }: TreeProps<TData>): React.ReactElement {
+  // Derive internal flags from mode
+  const enableBulkActions = mode === "multiple";
+  const disableSelection = mode === "none";
+
+  // Store renderItem in ref for stable context reference
+  const renderItemRef = React.useRef(renderItem);
+  renderItemRef.current = renderItem;
+
   const [internalExpanded, setInternalExpanded] = React.useState<Set<string>>(
-    new Set(defaultExpanded),
+    () => new Set(defaultExpanded)
   );
 
   const focusableNodes = React.useRef<Map<string, HTMLElement>>(new Map());
@@ -132,14 +194,107 @@ function Tree<TData = unknown>({
     string | null
   >(null);
 
+  // Track nodes that are currently loading children
+  const [loadingNodes, setLoadingNodes] = React.useState<Set<string>>(
+    () => new Set()
+  );
+
+  // Track nodes that have already loaded their children
+  const loadedNodesRef = React.useRef<Set<string>>(new Set());
+
+  // Store dynamically loaded children
+  const [loadedChildren, setLoadedChildren] = React.useState<
+    Map<string, TreeNode<TData>[]>
+  >(() => new Map());
+
   const expandedNodes = React.useMemo(() => {
     return expanded ? new Set(expanded) : internalExpanded;
   }, [expanded, internalExpanded]);
 
+  // Merge loaded children into the tree data
+  const mergedData = React.useMemo(() => {
+    if (loadedChildren.size === 0) return data;
+
+    const mergeChildren = (nodes: TreeNode<TData>[]): TreeNode<TData>[] => {
+      return nodes.map((node) => {
+        const loaded = loadedChildren.get(node.id);
+        if (loaded) {
+          return { ...node, children: loaded };
+        }
+        if (node.children) {
+          return { ...node, children: mergeChildren(node.children) };
+        }
+        return node;
+      });
+    };
+
+    return mergeChildren(data);
+  }, [data, loadedChildren]);
+
   const handleToggleNode = React.useCallback(
-    (nodeId: string) => {
+    async (nodeId: string) => {
+      const isCurrentlyExpanded = expandedNodes.has(nodeId);
+      const isExpanding = !isCurrentlyExpanded;
+
+      // Find the node to check if it needs to load children
+      const findNode = (
+        nodes: TreeNode<TData>[]
+      ): TreeNode<TData> | undefined => {
+        for (const node of nodes) {
+          if (node.id === nodeId) return node;
+          if (node.children) {
+            const found = findNode(node.children);
+            if (found) return found;
+          }
+        }
+        return undefined;
+      };
+
+      const node = findNode(mergedData);
+      const needsToLoad =
+        isExpanding &&
+        node &&
+        "onLoadChildren" in node &&
+        node.onLoadChildren &&
+        !loadedNodesRef.current.has(nodeId);
+
+      // If we need to load children, delay expansion until loaded
+      if (needsToLoad) {
+        setLoadingNodes((prev) => new Set(prev).add(nodeId));
+        loadedNodesRef.current.add(nodeId);
+
+        try {
+          const children = await node.onLoadChildren!();
+          setLoadedChildren((prev) => {
+            const next = new Map(prev);
+            next.set(nodeId, children);
+            return next;
+          });
+
+          // NOW expand the node after children are loaded
+          const newExpanded = new Set(expandedNodes);
+          newExpanded.add(nodeId);
+          if (expanded && onExpandedChange) {
+            onExpandedChange(Array.from(newExpanded));
+          } else {
+            setInternalExpanded(newExpanded);
+          }
+        } catch (error) {
+          console.error(`Failed to load children for node ${nodeId}:`, error);
+          loadedNodesRef.current.delete(nodeId);
+        } finally {
+          setLoadingNodes((prev) => {
+            const next = new Set(prev);
+            next.delete(nodeId);
+            return next;
+          });
+        }
+        return;
+      }
+
+      // Standard toggle for collapsing or nodes that don't need to load
       const newExpanded = new Set(expandedNodes);
-      if (newExpanded.has(nodeId)) {
+      if (isCurrentlyExpanded) {
         newExpanded.delete(nodeId);
       } else {
         newExpanded.add(nodeId);
@@ -151,7 +306,7 @@ function Tree<TData = unknown>({
         setInternalExpanded(newExpanded);
       }
     },
-    [expandedNodes, expanded, onExpandedChange],
+    [expandedNodes, expanded, onExpandedChange, mergedData]
   );
 
   const checkedNodesSet = React.useMemo(() => {
@@ -159,47 +314,36 @@ function Tree<TData = unknown>({
   }, [checkedNodes]);
 
   // Compute parent node map for ALL nodes (not just visible ones)
-  const parentNodeMap = React.useMemo(() => {
-    const parentMap = new Map<string, string>();
+  const parentNodeMap = React.useMemo(
+    () => buildParentMap(mergedData),
+    [mergedData]
+  );
 
-    const buildParentMap = (
-      nodes: TreeNode<TData>[],
-      parentId?: string,
-    ): void => {
-      for (const node of nodes) {
-        if (parentId) {
-          parentMap.set(node.id, parentId);
-        }
-        if (node.children) {
-          buildParentMap(node.children, node.id);
-        }
-      }
-    };
+  const { visibleNodeIds, disabledNodesMap } = React.useMemo(
+    () => collectVisibleIds(mergedData, expandedNodes),
+    [mergedData, expandedNodes]
+  );
 
-    buildParentMap(data);
-    return parentMap;
-  }, [data]);
+  // Create loading nodes map
+  const loadingNodesMap = React.useMemo(() => {
+    const map = new Map<string, boolean>();
+    loadingNodes.forEach((id) => map.set(id, true));
+    return map;
+  }, [loadingNodes]);
 
-  // Compute visible node IDs and disabled node map synchronously so it's available on first render
-  const { visibleNodeIds, disabledNodesMap } = React.useMemo(() => {
-    const ids: string[] = [];
-    const disabledMap = new Map<string, boolean>();
+  // Focus restoration: when data changes and focused node is removed, focus first node
+  React.useEffect(() => {
+    if (!lastFocusedNodeId || visibleNodeIds.includes(lastFocusedNodeId))
+      return;
 
-    const collectVisibleIds = (nodes: TreeNode<TData>[]): void => {
-      for (const node of nodes) {
-        ids.push(node.id);
-        if (node.disabled) {
-          disabledMap.set(node.id, true);
-        }
-        if (node.children && expandedNodes.has(node.id)) {
-          collectVisibleIds(node.children);
-        }
-      }
-    };
-
-    collectVisibleIds(data);
-    return { visibleNodeIds: ids, disabledNodesMap: disabledMap };
-  }, [data, expandedNodes]);
+    const firstId = visibleNodeIds[0];
+    if (firstId) {
+      setLastFocusedNodeId(firstId);
+      setTimeout(() => focusableNodes.current.get(firstId)?.focus(), 0);
+    } else {
+      setLastFocusedNodeId(null);
+    }
+  }, [visibleNodeIds, lastFocusedNodeId]);
 
   const contextValue = React.useMemo(
     () => ({
@@ -209,7 +353,10 @@ function Tree<TData = unknown>({
       onToggleNode: handleToggleNode,
       checkedNodes: checkedNodesSet,
       onCheckedNodesChange,
-      renderItem: renderItem as (item: TreeNode<unknown>) => React.ReactElement,
+      renderItem: ((item: TreeNode<Record<string, unknown>>) =>
+        renderItemRef.current(item as TreeNode<TData>)) as (
+        item: TreeNode<Record<string, unknown>>
+      ) => React.ReactElement,
       variant,
       showLines,
       enableBulkActions,
@@ -217,10 +364,11 @@ function Tree<TData = unknown>({
       focusableNodes,
       visibleNodeIds,
       disabledNodesMap,
+      loadingNodesMap,
       parentNodeMap,
       lastFocusedNodeId,
       setLastFocusedNodeId,
-      data,
+      data: mergedData,
     }),
     [
       selectedNode,
@@ -229,35 +377,42 @@ function Tree<TData = unknown>({
       handleToggleNode,
       checkedNodesSet,
       onCheckedNodesChange,
-      renderItem,
       variant,
       showLines,
       enableBulkActions,
       disableSelection,
       visibleNodeIds,
       disabledNodesMap,
+      loadingNodesMap,
       parentNodeMap,
       lastFocusedNodeId,
-      data,
-    ],
+      setLastFocusedNodeId,
+      mergedData,
+    ]
   );
 
   const defaultProps = {
     "data-slot": "tree",
     className: cn(
       "w-full min-w-0 text-sm",
-      variant === "nested" &&
+      variant === "filled" &&
         "ring ring-border/60 ring-1 bg-muted rounded-2xl p-2 shadow-sm",
       variant === "outline" &&
-        "overflow-hidden rounded-2xl ring ring-border/60 bg-card p-2 shadow-lg",
-      className,
+        "overflow-hidden rounded-2xl ring ring-border/60 bg-card p-2 shadow-sm",
+      className
     ),
     role: "tree",
     "aria-multiselectable": enableBulkActions,
     children: (
       <TreeContext.Provider value={contextValue}>
-        {data.map((node) => (
-          <TreeItemInternal key={node.id} node={node} depth={0} />
+        {mergedData.map((node, index) => (
+          <TreeItemInternal
+            key={node.id}
+            node={node}
+            depth={0}
+            positionInSet={index + 1}
+            setSize={mergedData.length}
+          />
         ))}
       </TreeContext.Provider>
     ),
@@ -265,54 +420,11 @@ function Tree<TData = unknown>({
 
   const element = useRender({
     defaultTagName: "div",
-    render: render,
+    render,
     props: mergeProps<"div">(defaultProps, props),
   });
 
   return element;
-}
-
-// ============================================================================
-// Helper Components (Internal)
-// ============================================================================
-
-interface VerticalLineProps {
-  paddingLeft: number;
-}
-
-function VerticalLine({ paddingLeft }: VerticalLineProps) {
-  return (
-    <div
-      className="absolute top-0 bottom-0 left-0"
-      style={{ left: paddingLeft - VERTICAL_LINE_OFFSET }}
-    >
-      <div className="bg-border h-full w-px" />
-    </div>
-  );
-}
-
-interface ParentCheckboxProps {
-  disabled?: boolean;
-  tabIndex?: number;
-  className?: string;
-  onClick?: (e: React.MouseEvent) => void;
-}
-
-function ParentCheckbox({
-  disabled,
-  tabIndex,
-  className,
-  onClick,
-}: ParentCheckboxProps) {
-  return (
-    <Checkbox
-      parent
-      disabled={disabled}
-      tabIndex={tabIndex}
-      className={className}
-      onClick={onClick}
-    />
-  );
 }
 
 // ============================================================================
@@ -323,42 +435,19 @@ const INDENT_SIZE = 20;
 const INDENT_SIZE_WITH_CHECKBOX = 12;
 const VERTICAL_LINE_OFFSET = 4.5;
 const CHILD_VERTICAL_LINE_OFFSET = 15.5;
+const BADGE_TEXT_SIZE = "text-[10px]";
 
 // ============================================================================
 // Helper Functions - Defined outside component for stable references
 // ============================================================================
 
-function getAllDescendantIds<TData>(children: TreeNode<TData>[]): string[] {
-  const ids: string[] = [];
-  for (const child of children) {
-    ids.push(child.id);
-    if (child.children && child.children.length > 0) {
-      ids.push(...getAllDescendantIds(child.children));
-    }
-  }
-  return ids;
-}
-
-function getLeafNodeIds<TData>(nodes: TreeNode<TData>[]): string[] {
-  const leafIds: string[] = [];
-  for (const childNode of nodes) {
-    if (!childNode.children || childNode.children.length === 0) {
-      leafIds.push(childNode.id);
-    } else {
-      leafIds.push(...getLeafNodeIds(childNode.children));
-    }
-  }
-  return leafIds;
-}
-
 /**
  * Updates parent nodes based on their children's checked state.
  * A parent is checked if all its leaf descendants are checked.
  */
-function updateParentCheckStates<TData>(
-  nodes: TreeNode<TData>[],
-  checkedSet: Set<string>,
-): void {
+function updateParentCheckStates<
+  TData extends Record<string, unknown> = Record<string, unknown>
+>(nodes: TreeNode<TData>[], checkedSet: Set<string>): void {
   for (const node of nodes) {
     if (node.children && node.children.length > 0) {
       // Recursively update children first (bottom-up)
@@ -380,54 +469,12 @@ function updateParentCheckStates<TData>(
 }
 
 // ============================================================================
-// Shared Rendering Components
-// ============================================================================
-
-interface TreeItemContainerProps {
-  paddingLeft: number;
-  showLines: boolean;
-  depth: number;
-  isSelected: boolean;
-  isDisabled: boolean;
-  disableSelection: boolean;
-  children: React.ReactNode;
-}
-
-/**
- * Shared container structure for both leaf and parent tree items.
- * Handles padding, vertical lines, and hover/selection styling.
- */
-function TreeItemContainer({
-  paddingLeft,
-  showLines,
-  depth,
-  isSelected,
-  isDisabled,
-  disableSelection,
-  children,
-}: TreeItemContainerProps) {
-  return (
-    <div className="group relative flex select-none" style={{ paddingLeft }}>
-      {showLines && depth > 0 && <VerticalLine paddingLeft={paddingLeft} />}
-      <div
-        className={cn(
-          "flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
-          "hover:bg-accent",
-          isSelected && !disableSelection && "bg-accent text-accent-foreground",
-          isDisabled && "cursor-not-allowed opacity-50",
-        )}
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// ============================================================================
 // Custom Hooks
 // ============================================================================
 
-interface UseTreeCheckboxStateParams<TData> {
+interface UseTreeCheckboxStateParams<
+  TData extends Record<string, unknown> = Record<string, unknown>
+> {
   node: TreeNode<TData>;
   hasChildren: boolean;
   context: TreeContextValue<TData>;
@@ -439,20 +486,16 @@ interface UseTreeCheckboxStateReturn {
   handleLocalCheckboxChange: (newValues: string[]) => void;
 }
 
-function useTreeCheckboxState<TData>({
+function useTreeCheckboxState<
+  TData extends Record<string, unknown> = Record<string, unknown>
+>({
   node,
   hasChildren,
   context,
 }: UseTreeCheckboxStateParams<TData>): UseTreeCheckboxStateReturn {
-  // Memoize the results of calling helper functions (defined outside component)
   const allDescendantIds = React.useMemo(
-    () => (hasChildren ? getAllDescendantIds(node.children || []) : []),
-    [hasChildren, node.children],
-  );
-
-  const allLeafIds = React.useMemo(
-    () => (hasChildren ? getLeafNodeIds(node.children || []) : []),
-    [hasChildren, node.children],
+    () => (hasChildren ? getAllDescendantIds(node) : []),
+    [hasChildren, node]
   );
 
   const localChildValues = React.useMemo(() => {
@@ -488,7 +531,7 @@ function useTreeCheckboxState<TData>({
 
       context.onCheckedNodesChange(Array.from(currentSet));
     },
-    [context, allDescendantIds],
+    [context, allDescendantIds]
   );
 
   return {
@@ -502,272 +545,176 @@ function useTreeCheckboxState<TData>({
 // TreeItemInternal - Handles recursion internally
 // ============================================================================
 
-interface TreeItemInternalProps<TData = unknown> {
+interface TreeItemInternalProps<
+  TData extends Record<string, unknown> = Record<string, unknown>
+> {
   node: TreeNode<TData>;
   depth: number;
+  positionInSet?: number;
+  setSize?: number;
 }
 
-const TreeItemInternal = React.memo(
-  function TreeItemInternal<TData = unknown>({
-    node,
-    depth,
-  }: TreeItemInternalProps<TData>): React.ReactElement {
-    const context = useTreeContext<TData>();
+function TreeItemInternal<
+  TData extends Record<string, unknown> = Record<string, unknown>
+>({
+  node,
+  depth,
+  positionInSet,
+  setSize,
+}: TreeItemInternalProps<TData>): React.ReactElement {
+  const context = useTreeContext<TData>();
 
-    const hasChildren = Boolean(node.children && node.children.length > 0);
-    const isExpanded = context.expandedNodes.has(node.id);
-    const isSelected = context.selectedNode === node.id;
-    const isDisabled = node.disabled || false;
-    const isChecked =
-      context.enableBulkActions && context.checkedNodes
-        ? context.checkedNodes.has(node.id)
-        : false;
+  const hasChildren = Boolean(
+    (node.children && node.children.length > 0) ||
+      ("onLoadChildren" in node && node.onLoadChildren)
+  );
+  const isExpanded = context.expandedNodes.has(node.id);
+  const isSelected = context.selectedNode === node.id;
+  const isDisabled = node.disabled || false;
+  const isLoading =
+    context.loadingNodesMap.has(node.id) || node.loading || false;
+  const isChecked =
+    context.enableBulkActions && context.checkedNodes
+      ? context.checkedNodes.has(node.id)
+      : false;
 
-    // Roving tabindex: only the last focused node should be tabbable
-    // If no node has been focused yet, the first node is tabbable
-    const isFirstNode = context.visibleNodeIds[0] === node.id;
-    const isLastFocused = context.lastFocusedNodeId === node.id;
-    const isTabbable =
-      isLastFocused || (!context.lastFocusedNodeId && isFirstNode);
+  // Roving tabindex: only the last focused node should be tabbable
+  // If no node has been focused yet, the first node is tabbable
+  const isFirstNode = context.visibleNodeIds[0] === node.id;
+  const isLastFocused = context.lastFocusedNodeId === node.id;
+  const isTabbable =
+    isLastFocused || (!context.lastFocusedNodeId && isFirstNode);
 
-    const itemContextValue = React.useMemo(
-      () => ({
-        item: node,
-        depth,
-        isExpanded,
-        isSelected,
-        hasChildren,
-      }),
-      [node, depth, isExpanded, isSelected, hasChildren],
-    );
+  // Create merged context value with item-level state
+  const mergedContextValue = React.useMemo(
+    () => ({
+      ...context,
+      item: node,
+      depth,
+      isExpanded,
+      isSelected,
+      hasChildren,
+      isLoading,
+    }),
+    [context, node, depth, isExpanded, isSelected, hasChildren, isLoading]
+  );
 
-    const handleToggleChecked = React.useCallback(() => {
-      if (!context.onCheckedNodesChange || !context.checkedNodes) return;
+  const handleToggleChecked = React.useCallback(() => {
+    if (!context.onCheckedNodesChange || !context.checkedNodes) return;
 
-      const currentSet = new Set(context.checkedNodes);
-      const allDescendantIds = hasChildren
-        ? getAllDescendantIds(node.children || [])
-        : [];
+    const currentSet = new Set(context.checkedNodes);
+    const allDescendantIds = hasChildren ? getAllDescendantIds(node) : [];
 
-      if (isChecked) {
-        // Uncheck this node and all descendants
-        currentSet.delete(node.id);
-        for (const id of allDescendantIds) {
-          currentSet.delete(id);
-        }
-      } else {
-        // Check this node and all descendants
-        currentSet.add(node.id);
-        for (const id of allDescendantIds) {
-          currentSet.add(id);
-        }
+    if (isChecked) {
+      // Uncheck this node and all descendants
+      currentSet.delete(node.id);
+      for (const id of allDescendantIds) {
+        currentSet.delete(id);
       }
+    } else {
+      // Check this node and all descendants
+      currentSet.add(node.id);
+      for (const id of allDescendantIds) {
+        currentSet.add(id);
+      }
+    }
 
-      // Update all parent nodes based on their children's checked state
-      updateParentCheckStates(context.data, currentSet);
+    // Update all parent nodes based on their children's checked state
+    updateParentCheckStates(context.data, currentSet);
 
-      context.onCheckedNodesChange(Array.from(currentSet));
-    }, [context, isChecked, node.id, node.children, hasChildren]);
+    context.onCheckedNodesChange(Array.from(currentSet));
+  }, [context, isChecked, node, hasChildren]);
 
-    const handleClick = React.useCallback(
-      (e: React.MouseEvent) => {
-        if (isDisabled) return;
-        e.stopPropagation();
+  const handleClick = React.useCallback(
+    (e: React.MouseEvent) => {
+      if (isDisabled) return;
+      e.stopPropagation();
 
-        if (context.enableBulkActions) {
-          handleToggleChecked();
-        } else if (!context.disableSelection) {
-          context.onNodeSelect?.(node.id);
-        }
-      },
-      [context, node.id, isDisabled, handleToggleChecked],
-    );
+      if (context.enableBulkActions) {
+        handleToggleChecked();
+      } else if (!context.disableSelection) {
+        context.onNodeSelect?.(node.id);
+      }
+    },
+    [context, node.id, isDisabled, handleToggleChecked]
+  );
 
-    const handleKeyDown = React.useCallback(
-      (e: React.KeyboardEvent) => {
-        if (isDisabled) return;
-
-        const currentIndex = context.visibleNodeIds.indexOf(node.id);
-
-        switch (e.key) {
-          case " ":
-            e.preventDefault();
-            e.stopPropagation(); // Prevent Collapsible from handling
-            if (context.enableBulkActions) {
-              // When bulk actions enabled, Space toggles checked state ONLY
-              handleToggleChecked();
-            } else {
-              // Otherwise, Space expands/collapses and selects
-              if (hasChildren) {
-                context.onToggleNode(node.id);
-              }
-              if (!context.disableSelection) {
-                context.onNodeSelect?.(node.id);
-              }
-            }
-            break;
-          case "Enter":
-            e.preventDefault();
-            e.stopPropagation(); // Prevent Collapsible from handling
-            if (context.enableBulkActions) {
-              // When bulk actions enabled:
-              // - Parent nodes: Enter expands/collapses
-              // - Leaf nodes: Enter toggles checkbox (default action)
-              if (hasChildren) {
-                context.onToggleNode(node.id);
-              } else {
-                handleToggleChecked();
-              }
-            } else {
-              // When bulk actions NOT enabled, Enter expands/collapses and selects
-              if (hasChildren) {
-                context.onToggleNode(node.id);
-              }
-              if (!context.disableSelection) {
-                context.onNodeSelect?.(node.id);
-              }
-            }
-            break;
-          case "ArrowRight":
-            e.preventDefault();
-            if (hasChildren && !isExpanded) {
-              context.onToggleNode(node.id);
-            }
-            break;
-          case "ArrowLeft":
-            e.preventDefault();
-            if (hasChildren && isExpanded) {
-              // If node is expanded, collapse it
-              context.onToggleNode(node.id);
-            } else {
-              // If node is collapsed or is a leaf, focus parent
-              const parentId = context.parentNodeMap.get(node.id);
-              if (parentId) {
-                const parentElement =
-                  context.focusableNodes.current.get(parentId);
-                if (parentElement) {
-                  parentElement.focus();
-                  context.setLastFocusedNodeId(parentId);
-                }
-              }
-            }
-            break;
-          case "ArrowDown": {
-            e.preventDefault();
-            // Find next non-disabled node
-            let nextIndex = currentIndex + 1;
-            while (nextIndex < context.visibleNodeIds.length) {
-              const nextId = context.visibleNodeIds[nextIndex];
-              // Skip if node is disabled
-              if (context.disabledNodesMap.has(nextId)) {
-                nextIndex++;
-                continue;
-              }
-              const nextElement = context.focusableNodes.current.get(nextId);
-              if (nextElement) {
-                nextElement.focus();
-                context.setLastFocusedNodeId(nextId);
-                break;
-              }
-              nextIndex++;
-            }
-            break;
-          }
-          case "ArrowUp": {
-            e.preventDefault();
-            // Find previous non-disabled node
-            let prevIndex = currentIndex - 1;
-            while (prevIndex >= 0) {
-              const prevId = context.visibleNodeIds[prevIndex];
-              // Skip if node is disabled
-              if (context.disabledNodesMap.has(prevId)) {
-                prevIndex--;
-                continue;
-              }
-              const prevElement = context.focusableNodes.current.get(prevId);
-              if (prevElement) {
-                prevElement.focus();
-                context.setLastFocusedNodeId(prevId);
-                break;
-              }
-              prevIndex--;
-            }
-            break;
-          }
-          case "Home": {
-            e.preventDefault();
-            // Find first non-disabled node
-            for (let i = 0; i < context.visibleNodeIds.length; i++) {
-              const firstId = context.visibleNodeIds[i];
-              if (context.disabledNodesMap.has(firstId)) continue;
-              const firstElement = context.focusableNodes.current.get(firstId);
-              if (firstElement) {
-                firstElement.focus();
-                context.setLastFocusedNodeId(firstId);
-                break;
-              }
-            }
-            break;
-          }
-          case "End": {
-            e.preventDefault();
-            // Find last non-disabled node
-            for (let i = context.visibleNodeIds.length - 1; i >= 0; i--) {
-              const lastId = context.visibleNodeIds[i];
-              if (context.disabledNodesMap.has(lastId)) continue;
-              const lastElement = context.focusableNodes.current.get(lastId);
-              if (lastElement) {
-                lastElement.focus();
-                context.setLastFocusedNodeId(lastId);
-                break;
-              }
-            }
-            break;
-          }
-        }
-      },
-      [
+  const handleKeyDown = React.useCallback(
+    (e: React.KeyboardEvent) => {
+      handleTreeKeyboardNavigation(e, {
+        nodeId: node.id,
         hasChildren,
         isExpanded,
-        context,
-        node.id,
         isDisabled,
-        handleToggleChecked,
-      ],
-    );
-
-    const paddingLeft =
-      depth *
-      (context.enableBulkActions ? INDENT_SIZE_WITH_CHECKBOX : INDENT_SIZE);
-
-    // ============================================================================
-    // ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS
-    // ============================================================================
-
-    // Checkbox state management (extracted to custom hook for clarity)
-    const { allDescendantIds, localChildValues, handleLocalCheckboxChange } =
-      useTreeCheckboxState({
         node,
-        hasChildren,
-        context,
+        visibleNodeIds: context.visibleNodeIds,
+        disabledNodesMap: context.disabledNodesMap,
+        parentNodeMap: context.parentNodeMap,
+        focusableNodes: context.focusableNodes,
+        enableBulkActions: context.enableBulkActions,
+        disableSelection: context.disableSelection,
+        onToggleNode: context.onToggleNode,
+        onNodeSelect: context.onNodeSelect,
+        setLastFocusedNodeId: context.setLastFocusedNodeId,
+        handleToggleChecked,
       });
+    },
+    [
+      node,
+      hasChildren,
+      isExpanded,
+      isDisabled,
+      context.visibleNodeIds,
+      context.disabledNodesMap,
+      context.parentNodeMap,
+      context.focusableNodes,
+      context.enableBulkActions,
+      context.disableSelection,
+      context.onToggleNode,
+      context.onNodeSelect,
+      context.setLastFocusedNodeId,
+      handleToggleChecked,
+    ]
+  );
 
-    // ============================================================================
-    // NOW SAFE TO HAVE CONDITIONAL RETURNS
-    // ============================================================================
+  const paddingLeft =
+    depth *
+    (context.enableBulkActions ? INDENT_SIZE_WITH_CHECKBOX : INDENT_SIZE);
 
-    // Render leaf node (no children)
-    if (!hasChildren) {
-      return (
-        <TreeItemContext.Provider value={itemContextValue}>
-          <div className={cn("mt-0.5 first:mt-0")}>
-            <TreeItemContainer
-              paddingLeft={paddingLeft}
-              showLines={context.showLines}
-              depth={depth}
-              isSelected={isSelected}
-              isDisabled={isDisabled}
-              disableSelection={context.disableSelection}
+  // Checkbox state management
+  const { allDescendantIds, localChildValues, handleLocalCheckboxChange } =
+    useTreeCheckboxState({
+      node,
+      hasChildren,
+      context,
+    });
+
+  // Render leaf node (no children)
+  if (!hasChildren) {
+    return (
+      <TreeContext.Provider value={mergedContextValue as TreeContextValue}>
+        <div className={cn("mt-0.5 first:mt-0")}>
+          <div
+            className="group relative flex select-none"
+            style={{ paddingLeft }}
+          >
+            {context.showLines && depth > 0 && (
+              <div
+                className="absolute top-0 bottom-0 left-0"
+                style={{ left: paddingLeft - VERTICAL_LINE_OFFSET }}
+              >
+                <div className="bg-border h-full w-px" />
+              </div>
+            )}
+            <div
+              className={cn(
+                "flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
+                "hover:bg-accent",
+                isSelected &&
+                  !context.disableSelection &&
+                  "bg-accent text-accent-foreground",
+                isDisabled && "cursor-not-allowed opacity-50"
+              )}
             >
               <div
                 ref={(el) => {
@@ -781,12 +728,10 @@ const TreeItemInternal = React.memo(
                   "-my-1.5 flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 transition-colors outline-none select-none",
                   "-mx-2",
                   "focus-visible:bg-accent focus-visible:ring-ring/50 focus-visible:ring-2",
-                  !isDisabled && "cursor-pointer",
+                  !isDisabled && "cursor-pointer"
                 )}
                 onClick={handleClick}
                 onKeyDown={(e) => {
-                  // Prevent Collapsible.Trigger from handling Space/Enter
-                  // since we handle them ourselves in handleKeyDown
                   if (e.key === " " || e.key === "Enter") {
                     e.stopPropagation();
                   }
@@ -796,6 +741,9 @@ const TreeItemInternal = React.memo(
                   context.setLastFocusedNodeId(node.id);
                 }}
                 role="treeitem"
+                aria-level={depth + 1}
+                aria-setsize={setSize}
+                aria-posinset={positionInSet}
                 aria-selected={
                   context.enableBulkActions ? undefined : isSelected
                 }
@@ -814,35 +762,53 @@ const TreeItemInternal = React.memo(
                 )}
                 {context.renderItem(node)}
               </div>
-            </TreeItemContainer>
+            </div>
           </div>
-        </TreeItemContext.Provider>
-      );
-    }
+        </div>
+      </TreeContext.Provider>
+    );
+  }
 
-    // Render parent node (has children)
+  // Render parent node (has children)
 
-    const parentContent = (
-      <TreeItemContext.Provider value={itemContextValue}>
-        <div
-          role="treeitem"
-          aria-expanded={isExpanded}
-          aria-selected={context.enableBulkActions ? undefined : isSelected}
-          aria-checked={context.enableBulkActions ? isChecked : undefined}
-          aria-disabled={isDisabled}
-          className={cn("mt-0.5 first:mt-0")}
+  const parentContent = (
+    <TreeContext.Provider value={mergedContextValue as TreeContextValue}>
+      <div
+        role="treeitem"
+        aria-expanded={isExpanded}
+        aria-level={depth + 1}
+        aria-setsize={setSize}
+        aria-posinset={positionInSet}
+        aria-selected={context.enableBulkActions ? undefined : isSelected}
+        aria-checked={context.enableBulkActions ? isChecked : undefined}
+        aria-disabled={isDisabled}
+        className={cn("mt-0.5 first:mt-0")}
+      >
+        <BaseCollapsible.Root
+          open={isExpanded}
+          onOpenChange={() => !isDisabled && context.onToggleNode(node.id)}
         >
-          <BaseCollapsible.Root
-            open={isExpanded}
-            onOpenChange={() => !isDisabled && context.onToggleNode(node.id)}
+          <div
+            className="group relative flex select-none"
+            style={{ paddingLeft }}
           >
-            <TreeItemContainer
-              paddingLeft={paddingLeft}
-              showLines={context.showLines}
-              depth={depth}
-              isSelected={isSelected}
-              isDisabled={isDisabled}
-              disableSelection={context.disableSelection}
+            {context.showLines && depth > 0 && (
+              <div
+                className="absolute top-0 bottom-0 left-0"
+                style={{ left: paddingLeft - VERTICAL_LINE_OFFSET }}
+              >
+                <div className="bg-border h-full w-px" />
+              </div>
+            )}
+            <div
+              className={cn(
+                "flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
+                "hover:bg-accent",
+                isSelected &&
+                  !context.disableSelection &&
+                  "bg-accent text-accent-foreground",
+                isDisabled && "cursor-not-allowed opacity-50"
+              )}
             >
               {context.enableBulkActions ? (
                 // In bulk actions mode, use plain div to avoid Collapsible.Trigger keyboard handling
@@ -857,7 +823,7 @@ const TreeItemInternal = React.memo(
                   className={cn(
                     "group/trigger -mx-2 -my-1.5 flex flex-1 items-center gap-2 rounded-md border-0 bg-transparent px-2 py-1.5 text-left transition-colors outline-none select-none",
                     "focus-visible:bg-accent focus-visible:ring-ring/50 focus-visible:ring-2",
-                    !isDisabled && "cursor-pointer",
+                    !isDisabled && "cursor-pointer"
                   )}
                   onClick={() => {
                     // Clicking node text/content expands/collapses
@@ -878,7 +844,8 @@ const TreeItemInternal = React.memo(
                       handleToggleChecked();
                     }}
                   >
-                    <ParentCheckbox
+                    <Checkbox
+                      parent
                       disabled={isDisabled}
                       tabIndex={-1}
                       className="pointer-events-auto cursor-pointer"
@@ -887,9 +854,9 @@ const TreeItemInternal = React.memo(
                   <ChevronRightIcon
                     aria-hidden="true"
                     className={cn(
-                      "text-muted-foreground ease-out-cubic size-4 shrink-0 transition-transform duration-325",
+                      "text-muted-foreground ease-out-cubic size-4 shrink-0 transition-transform duration-[325ms]",
                       isExpanded && "rotate-90",
-                      isDisabled && "opacity-50",
+                      isDisabled && "opacity-50"
                     )}
                   />
                   {context.renderItem(node)}
@@ -907,7 +874,7 @@ const TreeItemInternal = React.memo(
                   className={cn(
                     "group/trigger -mx-2 -my-1.5 flex flex-1 items-center gap-2 rounded-md border-0 bg-transparent px-2 py-1.5 text-left transition-colors outline-none select-none",
                     "focus-visible:bg-accent focus-visible:ring-ring/50 focus-visible:ring-2",
-                    !isDisabled && "cursor-pointer",
+                    !isDisabled && "cursor-pointer"
                   )}
                   onClick={(e) => {
                     if (!isDisabled && !context.disableSelection) {
@@ -924,27 +891,29 @@ const TreeItemInternal = React.memo(
                   <ChevronRightIcon
                     aria-hidden="true"
                     className={cn(
-                      "text-muted-foreground ease-out-cubic size-4 shrink-0 transition-transform duration-325",
+                      "text-muted-foreground ease-out-cubic size-4 shrink-0 transition-transform duration-[325ms]",
                       isExpanded && "rotate-90",
-                      isDisabled && "opacity-50",
+                      isDisabled && "opacity-50"
                     )}
                   />
                   {context.renderItem(node)}
                 </BaseCollapsible.Trigger>
               )}
-            </TreeItemContainer>
+            </div>
+          </div>
 
-            <BaseCollapsible.Panel
-              className={cn(
-                "ease-out-cubic h-[var(--collapsible-panel-height)] overflow-y-clip transition-all duration-325",
-                "data-[ending-style]:h-0 data-[ending-style]:opacity-0",
-                "data-[starting-style]:h-0 data-[starting-style]:opacity-0",
-              )}
-            >
+          <BaseCollapsible.Panel
+            className={cn(
+              "ease-out-cubic h-[var(--collapsible-panel-height)] overflow-y-clip transition-all duration-[325ms]",
+              "data-[ending-style]:h-0 data-[ending-style]:opacity-0",
+              "data-[starting-style]:h-0 data-[starting-style]:opacity-0"
+            )}
+          >
+            {node.children && node.children.length > 0 && (
               <div
                 className={cn(
                   context.showLines && "relative",
-                  "pt-0.5 pb-0.5 pl-0",
+                  "pt-0.5 pb-0.5 pl-0"
                 )}
               >
                 {context.showLines && (
@@ -953,161 +922,171 @@ const TreeItemInternal = React.memo(
                     style={{ left: paddingLeft + CHILD_VERTICAL_LINE_OFFSET }}
                   />
                 )}
-                {node.children?.map((child) => (
+                {node.children.map((child, index) => (
                   <TreeItemInternal
                     key={child.id}
                     node={child}
                     depth={depth + 1}
+                    positionInSet={index + 1}
+                    setSize={node.children?.length}
                   />
                 ))}
               </div>
-            </BaseCollapsible.Panel>
-          </BaseCollapsible.Root>
-        </div>
-      </TreeItemContext.Provider>
-    );
+            )}
+          </BaseCollapsible.Panel>
+        </BaseCollapsible.Root>
+      </div>
+    </TreeContext.Provider>
+  );
 
-    if (context.enableBulkActions) {
-      return (
-        <CheckboxGroup
-          value={localChildValues}
-          onValueChange={handleLocalCheckboxChange}
-          allValues={allDescendantIds}
-        >
-          {parentContent}
-        </CheckboxGroup>
-      );
-    }
-
-    return parentContent;
-  },
-  (prevProps, nextProps) => {
-    // Only re-render if the node reference or depth changed
-    // This prevents re-renders when context values like lastFocusedNodeId change
+  if (context.enableBulkActions) {
     return (
-      prevProps.node === nextProps.node && prevProps.depth === nextProps.depth
+      <CheckboxGroup
+        value={localChildValues}
+        onValueChange={handleLocalCheckboxChange}
+        allValues={allDescendantIds}
+      >
+        {parentContent}
+      </CheckboxGroup>
     );
-  },
-) as <TData = unknown>(
-  props: TreeItemInternalProps<TData>,
-) => React.ReactElement;
+  }
+
+  return parentContent;
+}
 
 // ============================================================================
 // TreeItem Component (Public API)
 // ============================================================================
 
-export interface TreeItemProps<TData = unknown> {
-  item: TreeNode<TData>;
+export interface TreeItemProps extends useRender.ComponentProps<"div"> {
   children: React.ReactNode;
 }
 
-function TreeItem<TData = unknown>({ children }: TreeItemProps<TData>) {
-  // TreeItem is just a wrapper that provides the content
-  // The actual rendering happens in TreeItemInternal
-  return <>{children}</>;
-}
+function TreeItem({ className, children, render, ...props }: TreeItemProps) {
+  const defaultProps = {
+    "data-slot": "tree-item",
+    className: cn("flex flex-1 items-center gap-2", className),
+    children,
+  };
 
-// ============================================================================
-// TreeItemContent Component
-// ============================================================================
+  const element = useRender({
+    defaultTagName: "div",
+    render,
+    props: mergeProps<"div">(defaultProps, props),
+  });
 
-export interface TreeItemContentProps
-  extends React.HTMLAttributes<HTMLDivElement> {
-  children: React.ReactNode;
-}
-
-function TreeItemContent({
-  className,
-  children,
-  ...props
-}: TreeItemContentProps) {
-  return (
-    <div
-      data-slot="tree-item-content"
-      className={cn("flex flex-1 items-center gap-2", className)}
-      {...props}
-    >
-      {children}
-    </div>
-  );
+  return element;
 }
 
 // ============================================================================
 // TreeItemIcon Component
 // ============================================================================
 
-export interface TreeItemIconProps
-  extends React.HTMLAttributes<HTMLSpanElement> {
+export interface TreeItemIconProps extends useRender.ComponentProps<"span"> {
   children?: React.ReactNode;
 }
 
-function TreeItemIcon({ children, className, ...props }: TreeItemIconProps) {
-  const { item, isExpanded } = useTreeItemContext();
+function TreeItemIcon({
+  children,
+  className,
+  render,
+  ...props
+}: TreeItemIconProps) {
+  const { item, isExpanded, isLoading } = useTreeItemContext();
 
-  const displayIcon = isExpanded && item.iconOpen ? item.iconOpen : children;
+  // Show loading spinner if node is loading
+  let displayIcon: React.ReactNode;
+  if (isLoading) {
+    displayIcon = <Loader2Icon className="animate-spin" />;
+  } else {
+    displayIcon =
+      isExpanded && "iconOpen" in item && item.iconOpen
+        ? item.iconOpen
+        : children;
+  }
+
+  const defaultProps = {
+    "data-slot": "tree-item-icon",
+    className: cn("text-muted-foreground shrink-0 [&>svg]:size-4", className),
+    children: displayIcon,
+  };
+
+  const element = useRender({
+    defaultTagName: "span",
+    render,
+    props: mergeProps<"span">(defaultProps, props),
+  });
 
   if (!displayIcon) return null;
 
-  return (
-    <span
-      data-slot="tree-item-icon"
-      className={cn("text-muted-foreground shrink-0 [&>svg]:size-4", className)}
-      {...props}
-    >
-      {displayIcon}
-    </span>
-  );
+  return element;
 }
 
 // ============================================================================
 // TreeItemLabel Component
 // ============================================================================
 
-export interface TreeItemLabelProps
-  extends React.HTMLAttributes<HTMLSpanElement> {
+export interface TreeItemLabelProps extends useRender.ComponentProps<"span"> {
   children: React.ReactNode;
 }
 
-function TreeItemLabel({ children, className, ...props }: TreeItemLabelProps) {
+function TreeItemLabel({
+  children,
+  className,
+  render,
+  ...props
+}: TreeItemLabelProps) {
+  const defaultProps = {
+    "data-slot": "tree-item-label",
+    className: cn("truncate", className),
+    children,
+  };
+
+  const element = useRender({
+    defaultTagName: "span",
+    render,
+    props: mergeProps<"span">(defaultProps, props),
+  });
+
   if (!children) return null;
 
-  return (
-    <span
-      data-slot="tree-item-label"
-      className={cn("truncate", className)}
-      {...props}
-    >
-      {children}
-    </span>
-  );
+  return element;
 }
 
 // ============================================================================
 // TreeItemBadge Component
 // ============================================================================
 
-export interface TreeItemBadgeProps
-  extends React.HTMLAttributes<HTMLSpanElement> {
+export interface TreeItemBadgeProps extends useRender.ComponentProps<"span"> {
   children?: React.ReactNode;
 }
 
-function TreeItemBadge({ children, className, ...props }: TreeItemBadgeProps) {
+function TreeItemBadge({
+  children,
+  className,
+  render,
+  ...props
+}: TreeItemBadgeProps) {
+  const defaultProps = {
+    "data-slot": "tree-item-badge",
+    className: cn(
+      "ml-auto flex shrink-0 items-center",
+      // Scale down badges to match tree text size and prevent height increase
+      `[&_[data-slot=badge]]:py-0.5 [&_[data-slot=badge]]:${BADGE_TEXT_SIZE} [&_[data-slot=badge]]:leading-tight`,
+      className
+    ),
+    children,
+  };
+
+  const element = useRender({
+    defaultTagName: "span",
+    render,
+    props: mergeProps<"span">(defaultProps, props),
+  });
+
   if (!children) return null;
 
-  return (
-    <span
-      data-slot="tree-item-badge"
-      className={cn(
-        "ml-auto flex shrink-0 items-center",
-        // Scale down badges to match tree text size and prevent height increase
-        "[&_[data-slot=badge]]:py-0.5 [&_[data-slot=badge]]:text-[10px] [&_[data-slot=badge]]:leading-tight",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </span>
-  );
+  return element;
 }
 
 // ============================================================================
@@ -1117,9 +1096,13 @@ function TreeItemBadge({ children, className, ...props }: TreeItemBadgeProps) {
 export {
   Tree,
   TreeItem,
-  TreeItemContent,
   TreeItemIcon,
   TreeItemLabel,
   TreeItemBadge,
   type TreeVariant,
+  type TreeMode,
 };
+
+// Re-export tree utilities for consumers
+import * as TreeUtils from "./tree-utils";
+export { TreeUtils };
